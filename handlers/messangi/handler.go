@@ -15,6 +15,11 @@ import (
 	"github.com/nyaruka/gocommon/urns"
 )
 
+var validStatuses = map[string]bool{
+	"ACCEPTED": true,
+	"QUEUE":    true,
+}
+
 func init() {
 	courier.RegisterHandler(newHandler())
 }
@@ -154,7 +159,7 @@ func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.Sen
 	}
 
 	// check if message was accepted and we have a message ID
-	if responseData.Status == "ACCEPTED" && responseData.MessageID != "" {
+	if validStatuses[responseData.Status] && responseData.MessageID != "" {
 		res.AddExternalID(responseData.MessageID)
 		return nil
 	}
