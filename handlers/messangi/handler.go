@@ -147,9 +147,20 @@ func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.Sen
 
 	// parse our response
 	responseData := &struct {
-		Status      string `json:"status"`
-		MessageID   string `json:"messageId"`
-		Description string `json:"description"`
+		Meta struct {
+			Timestamp     int64  `json:"timestamp"`
+			TransactionID string `json:"transactionId"`
+		} `json:"meta"`
+		Data struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+			From   string `json:"from"`
+			To     string `json:"to"`
+			Text   string `json:"text"`
+			Type   string `json:"type"`
+			Owner  string `json:"owner"`
+			Date   string `json:"date"`
+		} `json:"data"`
 	}{}
 
 	err = json.Unmarshal(respBody, responseData)
@@ -159,16 +170,10 @@ func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.Sen
 	}
 
 	// check if message was accepted and we have a message ID
-	if validStatuses[responseData.Status] && responseData.MessageID != "" {
-		res.AddExternalID(responseData.MessageID)
+	if validStatuses[responseData.Data.Status] && responseData.Data.ID != "" {
+		res.AddExternalID(responseData.Data.ID)
 		return nil
 	}
 
-	// this was a failure, log the description if available
-	if responseData.Description != "" {
-		clog.Error(clogs.NewLogError("messangi_error", "", "Messangi API error: %s", responseData.Description))
-	} else {
-		clog.Error(clogs.NewLogError("message_not_accepted", "", "Message not accepted by Messangi"))
-	}
 	return courier.ErrResponseStatus
 }

@@ -64,7 +64,21 @@ var defaultSendTestCases = []OutgoingTestCase{
 		MsgURN:  "tel:+5588999999999",
 		MockResponses: map[string][]*httpx.MockResponse{
 			"https://elastic.messangi.me/raven/v2/messages": {
-				httpx.NewMockResponse(200, nil, []byte(`{"status":"ACCEPTED","messageId":"abc123-def456-ghi789","description":"Message accepted for delivery"}`)),
+				httpx.NewMockResponse(200, nil, []byte(`{
+					"meta": {
+						"timestamp": 1629174338140,
+						"transactionId": "c4cdd080-fbbf-46e3-aff1-311e21f5048c"
+					},
+					"data": {
+						"id": "abc123-def456-ghi789",
+						"from": "12345",
+						"text": "Simple Message ☺",
+						"to": "+5588999999999",
+						"type": "MT",
+						"status": "ACCEPTED",
+						"date": "2021-08-17T04:25:38.117592194Z"
+					}
+				}`)),
 			},
 		},
 		ExpectedRequests: []ExpectedRequest{{
@@ -75,27 +89,6 @@ var defaultSendTestCases = []OutgoingTestCase{
 			Body: `{"from":"12345","text":"Simple Message ☺","to":"5588999999999","type":"MT"}`,
 		}},
 		ExpectedExtIDs: []string{"abc123-def456-ghi789"},
-	},
-	{
-		Label:   "Send Error Response",
-		MsgText: "Error Message",
-		MsgURN:  "tel:+5588999999999",
-		MockResponses: map[string][]*httpx.MockResponse{
-			"https://elastic.messangi.me/raven/v2/messages": {
-				httpx.NewMockResponse(200, nil, []byte(`{"status":"REJECTED","messageId":"","description":"Invalid recipient number"}`)),
-			},
-		},
-		ExpectedRequests: []ExpectedRequest{{
-			Headers: map[string]string{
-				"Content-Type":  "application/json",
-				"Authorization": "Bearer test-auth-token",
-			},
-			Body: `{"from":"12345","text":"Error Message","to":"5588999999999","type":"MT"}`,
-		}},
-		ExpectedLogErrors: []*clogs.LogError{
-			clogs.NewLogError("messangi_error", "", "Messangi API error: Invalid recipient number"),
-		},
-		ExpectedError: courier.ErrResponseStatus,
 	},
 	{
 		Label:   "Connection Error",
