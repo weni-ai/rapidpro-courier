@@ -1,15 +1,15 @@
 name: CI
 on: [push, pull_request]
 env:
-  go-version: "1.23.x"
+  go-version: "1.24.x"
 jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
 
     services:
-      redis:
-        image: redis:6.2-alpine
+      valkey:
+        image: valkey/valkey:8.0-alpine
         ports:
           - 6379:6379
       postgres:
@@ -22,7 +22,7 @@ jobs:
           - 5432:5432
         options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
       minio:
-        image: bitnami/minio:latest
+        image: bitnamilegacy/minio:2025.4.22
         env:
           MINIO_ROOT_USER: root
           MINIO_ROOT_PASSWORD: tembatemba
