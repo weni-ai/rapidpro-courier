@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/nyaruka/courier/core/models"
 	"github.com/nyaruka/courier/utils/clogs"
 	"github.com/nyaruka/gocommon/urns"
 )
@@ -287,7 +288,7 @@ func (w *Sender) sendMessage(msg MsgOut) {
 	sendCTX, cancel := context.WithTimeout(context.Background(), time.Second*35)
 	defer cancel()
 
-	log = log.With("msg_id", msg.ID(), "msg_text", msg.Text(), "msg_urn", msg.URN().Identity())
+	log = log.With("msg_uuid", msg.UUID(), "msg_text", msg.Text(), "msg_urn", msg.URN().Identity())
 	if len(msg.Attachments()) > 0 {
 		log = log.With("attachments", msg.Attachments())
 	}
@@ -297,14 +298,14 @@ func (w *Sender) sendMessage(msg MsgOut) {
 
 	// if this is a resend, clear our sent status
 	if msg.IsResend() {
-		err := backend.ClearMsgSent(sendCTX, msg.ID())
+		err := backend.ClearMsgSent(sendCTX, msg.UUID())
 		if err != nil {
 			log.Error("error clearing sent status for msg", "error", err)
 		}
 	}
 
 	// was this msg already sent? (from a double queue?)
-	sent, err := backend.WasMsgSent(sendCTX, msg.ID())
+	sent, err := backend.WasMsgSent(sendCTX, msg.UUID())
 
 	// failing on a lookup isn't a halting problem but we should log it
 	if err != nil {
@@ -322,12 +323,12 @@ func (w *Sender) sendMessage(msg MsgOut) {
 
 	if handler == nil {
 		// if there's no handler, create a FAILED status for it
-		status = backend.NewStatusUpdate(msg.Channel(), msg.ID(), MsgStatusFailed, clog)
+		status = backend.NewStatusUpdate(msg.Channel(), msg.UUID(), models.MsgStatusFailed, clog)
 		log.Error(fmt.Sprintf("unable to find handler for channel type: %s", msg.Channel().ChannelType()))
 
 	} else if sent {
 		// if this message was already sent, create a WIRED status for it
-		status = backend.NewStatusUpdate(msg.Channel(), msg.ID(), MsgStatusWired, clog)
+		status = backend.NewStatusUpdate(msg.Channel(), msg.UUID(), models.MsgStatusWired, clog)
 		log.Warn("duplicate send, marking as wired")
 
 	} else {
@@ -358,7 +359,7 @@ func (w *Sender) sendByHandler(ctx context.Context, h ChannelHandler, m MsgOut, 
 	res := &SendResult{newURN: urns.NilURN}
 	err := h.Send(ctx, m, res, clog)
 
-	status := backend.NewStatusUpdate(m.Channel(), m.ID(), MsgStatusWired, clog)
+	status := backend.NewStatusUpdate(m.Channel(), m.UUID(), models.MsgStatusWired, clog)
 
 	// fow now we can only store one external id per message
 	if len(res.ExternalIDs()) > 0 {
@@ -378,16 +379,16 @@ func (w *Sender) sendByHandler(ctx context.Context, h ChannelHandler, m MsgOut, 
 			log.Error("error sending message", "error", err)
 		}
 		if serr.retryable {
-			status.SetStatus(MsgStatusErrored)
+			status.SetStatus(models.MsgStatusErrored)
 		} else {
-			status.SetStatus(MsgStatusFailed)
+			status.SetStatus(models.MsgStatusFailed)
 		}
 
 		clog.Error(&clogs.Error{Code: serr.clogCode, ExtCode: serr.clogExtCode, Message: serr.clogMsg})
 
 		// if handler returned ErrContactStopped need to write a stop event
 		if serr == ErrContactStopped {
-			channelEvent := backend.NewChannelEvent(m.Channel(), EventTypeStopContact, m.URN(), clog)
+			channelEvent := backend.NewChannelEvent(m.Channel(), models.EventTypeStopContact, m.URN(), clog)
 			if err = backend.WriteChannelEvent(ctx, channelEvent, clog); err != nil {
 				log.Error("error writing stop event", "error", err)
 			}
@@ -396,7 +397,7 @@ func (w *Sender) sendByHandler(ctx context.Context, h ChannelHandler, m MsgOut, 
 	} else if err != nil {
 		log.Error("error sending message", "error", err)
 
-		status.SetStatus(MsgStatusErrored)
+		status.SetStatus(models.MsgStatusErrored)
 
 		clog.Error(&clogs.Error{Code: "internal_error", Message: "An internal error occured."})
 	}

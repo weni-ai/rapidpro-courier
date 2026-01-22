@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/nyaruka/courier"
+	"github.com/nyaruka/courier/core/models"
 	"github.com/nyaruka/courier/handlers"
 	"github.com/nyaruka/courier/utils"
 	"github.com/nyaruka/gocommon/jsonx"
@@ -16,10 +17,10 @@ import (
 var (
 	defaultSendURL = "http://textit.com/wc/send"
 
-	statuses = map[string]courier.MsgStatus{
-		"sent":      courier.MsgStatusSent,
-		"delivered": courier.MsgStatusDelivered,
-		"failed":    courier.MsgStatusFailed,
+	statuses = map[string]models.MsgStatus{
+		"sent":      models.MsgStatusSent,
+		"delivered": models.MsgStatusDelivered,
+		"failed":    models.MsgStatusFailed,
 	}
 )
 
@@ -32,7 +33,7 @@ type handler struct {
 }
 
 func newHandler() courier.ChannelHandler {
-	return &handler{handlers.NewBaseHandler(courier.ChannelType("CHP"), "Chip Web Chat", handlers.WithRedactConfigKeys(courier.ConfigSecret))}
+	return &handler{handlers.NewBaseHandler(models.ChannelType("CHP"), "Chip Web Chat", handlers.WithRedactConfigKeys(models.ConfigSecret))}
 }
 
 // Initialize is called by the engine once everything is loaded
@@ -51,15 +52,15 @@ type receivePayload struct {
 			Text string `json:"text"`
 		} `json:"msg"`
 		Status struct {
-			MsgID  courier.MsgID `json:"msg_id"`
-			Status string        `json:"status"`
+			MsgUUID models.MsgUUID `json:"msg_uuid"`
+			Status  string         `json:"status"`
 		} `json:"status"`
 	}
 }
 
 // receiveMessage is our HTTP handler function for incoming events
 func (h *handler) receive(ctx context.Context, c courier.Channel, w http.ResponseWriter, r *http.Request, payload *receivePayload, clog *courier.ChannelLog) ([]courier.Event, error) {
-	secret := c.StringConfigForKey(courier.ConfigSecret, "")
+	secret := c.StringConfigForKey(models.ConfigSecret, "")
 	if !utils.SecretEqual(payload.Secret, secret) {
 		return nil, handlers.WriteAndLogRequestError(ctx, h, c, w, r, errors.New("secret incorrect"))
 	}
@@ -84,7 +85,7 @@ func (h *handler) receive(ctx context.Context, c courier.Channel, w http.Respons
 			data = append(data, courier.NewMsgReceiveData(msg))
 
 		} else if event.Type == "chat_started" {
-			evt := h.Backend().NewChannelEvent(c, courier.EventTypeNewConversation, urn, clog)
+			evt := h.Backend().NewChannelEvent(c, models.EventTypeNewConversation, urn, clog)
 
 			if err := h.Backend().WriteChannelEvent(ctx, evt, clog); err != nil {
 				return nil, err
@@ -95,7 +96,7 @@ func (h *handler) receive(ctx context.Context, c courier.Channel, w http.Respons
 		} else if event.Type == "msg_status" {
 			status := statuses[event.Status.Status]
 			if status != "" {
-				evt := h.Backend().NewStatusUpdate(c, event.Status.MsgID, status, clog)
+				evt := h.Backend().NewStatusUpdate(c, event.Status.MsgUUID, status, clog)
 
 				if err := h.Backend().WriteStatusUpdate(ctx, evt); err != nil {
 					return nil, err
@@ -111,12 +112,12 @@ func (h *handler) receive(ctx context.Context, c courier.Channel, w http.Respons
 }
 
 type sendMsg struct {
-	ID           courier.MsgID     `json:"id"`
-	Text         string            `json:"text"`
-	Attachments  []string          `json:"attachments,omitempty"`
-	QuickReplies []string          `json:"quick_replies,omitempty"`
-	Origin       courier.MsgOrigin `json:"origin"`
-	UserID       courier.UserID    `json:"user_id,omitempty"`
+	UUID         models.MsgUUID   `json:"uuid"`
+	Text         string           `json:"text"`
+	Attachments  []string         `json:"attachments,omitempty"`
+	QuickReplies []string         `json:"quick_replies,omitempty"`
+	Origin       models.MsgOrigin `json:"origin"`
+	UserID       models.UserID    `json:"user_id,omitempty"`
 }
 
 type sendPayload struct {
@@ -126,8 +127,8 @@ type sendPayload struct {
 }
 
 func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.SendResult, clog *courier.ChannelLog) error {
-	secret := msg.Channel().StringConfigForKey(courier.ConfigSecret, "")
-	sendURL := msg.Channel().StringConfigForKey(courier.ConfigSendURL, defaultSendURL)
+	secret := msg.Channel().StringConfigForKey(models.ConfigSecret, "")
+	sendURL := msg.Channel().StringConfigForKey(models.ConfigSendURL, defaultSendURL)
 	if secret == "" || sendURL == "" {
 		return courier.ErrChannelConfig
 	}
@@ -136,7 +137,7 @@ func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.Sen
 		ChatID: msg.URN().Path(),
 		Secret: secret,
 		Msg: sendMsg{
-			ID:           msg.ID(),
+			UUID:         msg.UUID(),
 			Text:         msg.Text(),
 			Attachments:  msg.Attachments(),
 			QuickReplies: handlers.TextOnlyQuickReplies(msg.QuickReplies()),

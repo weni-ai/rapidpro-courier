@@ -4,13 +4,9 @@ import (
 	"context"
 	"net/http"
 
+	"github.com/nyaruka/courier/core/models"
 	"github.com/nyaruka/gocommon/urns"
 )
-
-// Event is our interface for the types of things a ChannelHandleFunc can return.
-type Event interface {
-	EventID() int64
-}
 
 // ChannelHandleFunc is the interface ChannelHandlers must satisfy to handle incoming requests.
 // The Server will take care of looking up the channel by UUID before passing it to this function.
@@ -22,7 +18,7 @@ type ChannelHandleFunc func(context.Context, Channel, http.ResponseWriter, *http
 type ChannelHandler interface {
 	Initialize(Server) error
 	Server() Server
-	ChannelType() ChannelType
+	ChannelType() models.ChannelType
 	ChannelName() string
 	UseChannelRouteUUID() bool
 	RedactValues(Channel) []string
@@ -51,9 +47,9 @@ func RegisterHandler(handler ChannelHandler) {
 }
 
 // GetHandler returns the handler for the passed in channel type, or nil if not found
-func GetHandler(ct ChannelType) ChannelHandler {
+func GetHandler(ct models.ChannelType) ChannelHandler {
 	return registeredHandlers[ct]
 }
 
-var registeredHandlers = make(map[ChannelType]ChannelHandler)
-var activeHandlers = make(map[ChannelType]ChannelHandler)
+var registeredHandlers = make(map[models.ChannelType]ChannelHandler)
+var activeHandlers = make(map[models.ChannelType]ChannelHandler)

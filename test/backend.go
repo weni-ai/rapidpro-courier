@@ -10,21 +10,13 @@ import (
 	"time"
 
 	"github.com/gomodule/redigo/redis"
-	_ "github.com/lib/pq"
 	"github.com/nyaruka/courier"
+	"github.com/nyaruka/courier/core/models"
 	"github.com/nyaruka/courier/utils"
 	"github.com/nyaruka/gocommon/httpx"
 	"github.com/nyaruka/gocommon/urns"
 	"github.com/nyaruka/gocommon/uuids"
 )
-
-func init() {
-	courier.RegisterBackend("mock", buildMockBackend)
-}
-
-func buildMockBackend(config *courier.Config) courier.Backend {
-	return NewMockBackend()
-}
 
 type SavedAttachment struct {
 	Channel     courier.Channel
@@ -35,11 +27,11 @@ type SavedAttachment struct {
 
 // MockBackend is a mocked version of a backend which doesn't require a real database or cache
 type MockBackend struct {
-	channels          map[courier.ChannelUUID]courier.Channel
-	channelsByAddress map[courier.ChannelAddress]courier.Channel
+	channels          map[models.ChannelUUID]courier.Channel
+	channelsByAddress map[models.ChannelAddress]courier.Channel
 	contacts          map[urns.URN]courier.Contact
 	outgoingMsgs      []courier.MsgOut
-	media             map[string]courier.Media // url -> Media
+	media             map[string]*models.Media // url -> Media
 	errorOnQueue      bool
 
 	mutex     sync.RWMutex
@@ -52,11 +44,10 @@ type MockBackend struct {
 	savedAttachments     []*SavedAttachment
 	storageError         error
 
-	lastMsgID       courier.MsgID
 	lastContactName string
 	urnAuthTokens   map[urns.URN]map[string]string
-	sentMsgs        map[courier.MsgID]bool
-	seenExternalIDs map[string]courier.MsgUUID
+	sentMsgs        map[models.MsgUUID]bool
+	seenExternalIDs map[string]models.MsgUUID
 }
 
 // NewMockBackend returns a new mock backend suitable for testing
@@ -67,7 +58,7 @@ func NewMockBackend() *MockBackend {
 		MaxIdle:     2,                 // only keep up to 2 idle
 		IdleTimeout: 240 * time.Second, // how long to wait before reaping a connection
 		Dial: func() (redis.Conn, error) {
-			conn, err := redis.Dial("tcp", "localhost:6379")
+			conn, err := redis.Dial("tcp", "valkey:6379")
 			if err != nil {
 				return nil, err
 			}
@@ -84,12 +75,12 @@ func NewMockBackend() *MockBackend {
 	}
 
 	return &MockBackend{
-		channels:          make(map[courier.ChannelUUID]courier.Channel),
-		channelsByAddress: make(map[courier.ChannelAddress]courier.Channel),
+		channels:          make(map[models.ChannelUUID]courier.Channel),
+		channelsByAddress: make(map[models.ChannelAddress]courier.Channel),
 		contacts:          make(map[urns.URN]courier.Contact),
-		media:             make(map[string]courier.Media),
-		sentMsgs:          make(map[courier.MsgID]bool),
-		seenExternalIDs:   make(map[string]courier.MsgUUID),
+		media:             make(map[string]*models.Media),
+		sentMsgs:          make(map[models.MsgUUID]bool),
+		seenExternalIDs:   make(map[string]models.MsgUUID),
 		redisPool:         redisPool,
 	}
 }
@@ -108,26 +99,25 @@ func (mb *MockBackend) NewIncomingMsg(ctx context.Context, channel courier.Chann
 	uuid := mb.seenExternalIDs[fmt.Sprintf("%s|%s", m.Channel().UUID(), m.ExternalID())]
 	if uuid != "" {
 		m.uuid = uuid
-		m.alreadyWritten = true
 	}
 
 	return m
 }
 
 // NewOutgoingMsg creates a new outgoing message from the given params
-func (mb *MockBackend) NewOutgoingMsg(channel courier.Channel, id courier.MsgID, urn urns.URN, text string, highPriority bool, quickReplies []courier.QuickReply,
-	responseToExternalID string, origin courier.MsgOrigin, contactLastSeenOn *time.Time) courier.MsgOut {
+func (mb *MockBackend) NewOutgoingMsg(channel courier.Channel, uuid models.MsgUUID, contact *models.ContactReference, urn urns.URN, text string, highPriority bool, quickReplies []models.QuickReply,
+	responseToExternalID string, origin models.MsgOrigin) courier.MsgOut {
 
 	return &MockMsg{
 		channel:              channel,
-		id:                   id,
+		uuid:                 uuid,
+		contact:              contact,
 		urn:                  urn,
 		text:                 text,
 		highPriority:         highPriority,
 		quickReplies:         quickReplies,
 		responseToExternalID: responseToExternalID,
 		origin:               origin,
-		contactLastSeenOn:    contactLastSeenOn,
 	}
 }
 
@@ -154,18 +144,18 @@ func (mb *MockBackend) PopNextOutgoingMsg(ctx context.Context) (courier.MsgOut, 
 }
 
 // WasMsgSent returns whether the passed in msg was already sent
-func (mb *MockBackend) WasMsgSent(ctx context.Context, id courier.MsgID) (bool, error) {
+func (mb *MockBackend) WasMsgSent(ctx context.Context, uuid models.MsgUUID) (bool, error) {
 	mb.mutex.Lock()
 	defer mb.mutex.Unlock()
 
-	return mb.sentMsgs[id], nil
+	return mb.sentMsgs[uuid], nil
 }
 
-func (mb *MockBackend) ClearMsgSent(ctx context.Context, id courier.MsgID) error {
+func (mb *MockBackend) ClearMsgSent(ctx context.Context, uuid models.MsgUUID) error {
 	mb.mutex.Lock()
 	defer mb.mutex.Unlock()
 
-	delete(mb.sentMsgs, id)
+	delete(mb.sentMsgs, uuid)
 	return nil
 }
 
@@ -174,7 +164,7 @@ func (mb *MockBackend) OnSendComplete(ctx context.Context, msg courier.MsgOut, s
 	mb.mutex.Lock()
 	defer mb.mutex.Unlock()
 
-	mb.sentMsgs[msg.ID()] = true
+	mb.sentMsgs[msg.UUID()] = true
 }
 
 func (mb *MockBackend) OnReceiveComplete(ctx context.Context, ch courier.Channel, events []courier.Event, clog *courier.ChannelLog) {
@@ -198,14 +188,6 @@ func (mb *MockBackend) SetErrorOnQueue(shouldError bool) {
 func (mb *MockBackend) WriteMsg(ctx context.Context, m courier.MsgIn, clog *courier.ChannelLog) error {
 	mm := m.(*MockMsg)
 
-	// this msg has already been written (we received it twice), we are a no op
-	if mm.alreadyWritten {
-		return nil
-	}
-
-	mb.lastMsgID++
-	mm.id = mb.lastMsgID
-
 	if mb.errorOnQueue {
 		return errors.New("unable to queue message")
 	}
@@ -225,17 +207,17 @@ func (mb *MockBackend) WriteMsg(ctx context.Context, m courier.MsgIn, clog *cour
 }
 
 // NewStatusUpdate creates a new Status object for the given message id
-func (mb *MockBackend) NewStatusUpdate(channel courier.Channel, id courier.MsgID, status courier.MsgStatus, clog *courier.ChannelLog) courier.StatusUpdate {
+func (mb *MockBackend) NewStatusUpdate(channel courier.Channel, uuid models.MsgUUID, status models.MsgStatus, clog *courier.ChannelLog) courier.StatusUpdate {
 	return &MockStatusUpdate{
 		channel:   channel,
-		msgID:     id,
+		msgUUID:   uuid,
 		status:    status,
 		createdOn: time.Now().In(time.UTC),
 	}
 }
 
 // NewStatusUpdateByExternalID creates a new Status object for the given external id
-func (mb *MockBackend) NewStatusUpdateByExternalID(channel courier.Channel, externalID string, status courier.MsgStatus, clog *courier.ChannelLog) courier.StatusUpdate {
+func (mb *MockBackend) NewStatusUpdateByExternalID(channel courier.Channel, externalID string, status models.MsgStatus, clog *courier.ChannelLog) courier.StatusUpdate {
 	return &MockStatusUpdate{
 		channel:    channel,
 		externalID: externalID,
@@ -254,8 +236,9 @@ func (mb *MockBackend) WriteStatusUpdate(ctx context.Context, status courier.Sta
 }
 
 // NewChannelEvent creates a new channel event with the passed in parameters
-func (mb *MockBackend) NewChannelEvent(channel courier.Channel, eventType courier.ChannelEventType, urn urns.URN, clog *courier.ChannelLog) courier.ChannelEvent {
+func (mb *MockBackend) NewChannelEvent(channel courier.Channel, eventType models.ChannelEventType, urn urns.URN, clog *courier.ChannelLog) courier.ChannelEvent {
 	return &mockChannelEvent{
+		uuid:      models.ChannelEventUUID(uuids.NewV7()),
 		channel:   channel,
 		eventType: eventType,
 		urn:       urn,
@@ -280,19 +263,19 @@ func (mb *MockBackend) WriteChannelEvent(ctx context.Context, event courier.Chan
 }
 
 // GetChannel returns the channel with the passed in type and channel uuid
-func (mb *MockBackend) GetChannel(ctx context.Context, cType courier.ChannelType, uuid courier.ChannelUUID) (courier.Channel, error) {
+func (mb *MockBackend) GetChannel(ctx context.Context, cType models.ChannelType, uuid models.ChannelUUID) (courier.Channel, error) {
 	channel, found := mb.channels[uuid]
 	if !found {
-		return nil, courier.ErrChannelNotFound
+		return nil, models.ErrChannelNotFound
 	}
 	return channel, nil
 }
 
 // GetChannelByAddress returns the channel with the passed in type and channel address
-func (mb *MockBackend) GetChannelByAddress(ctx context.Context, cType courier.ChannelType, address courier.ChannelAddress) (courier.Channel, error) {
+func (mb *MockBackend) GetChannelByAddress(ctx context.Context, cType models.ChannelType, address models.ChannelAddress) (courier.Channel, error) {
 	channel, found := mb.channelsByAddress[address]
 	if !found {
-		return nil, courier.ErrChannelNotFound
+		return nil, models.ErrChannelNotFound
 	}
 	return channel, nil
 }
@@ -305,7 +288,7 @@ func (mb *MockBackend) GetContact(ctx context.Context, channel courier.Channel, 
 			return nil, nil
 		}
 
-		contact = &mockContact{channel, urn, authTokens, courier.ContactUUID(uuids.NewV4())}
+		contact = &mockContact{channel, urn, authTokens, models.ContactUUID(uuids.NewV4())}
 		mb.contacts[urn] = contact
 	}
 	return contact, nil
@@ -332,9 +315,6 @@ func (mb *MockBackend) Start() error { return nil }
 // Stop stops our mock backend
 func (mb *MockBackend) Stop() error { return nil }
 
-// Cleanup cleans up any connections that are open
-func (mb *MockBackend) Cleanup() error { return nil }
-
 // SaveAttachment saves an attachment to backend storage
 func (mb *MockBackend) SaveAttachment(ctx context.Context, ch courier.Channel, contentType string, data []byte, extension string) (string, error) {
 	if mb.storageError != nil {
@@ -351,7 +331,7 @@ func (mb *MockBackend) SaveAttachment(ctx context.Context, ch courier.Channel, c
 }
 
 // ResolveMedia resolves the passed in media URL to a media object
-func (mb *MockBackend) ResolveMedia(ctx context.Context, mediaUrl string) (courier.Media, error) {
+func (mb *MockBackend) ResolveMedia(ctx context.Context, mediaUrl string) (*models.Media, error) {
 	media := mb.media[mediaUrl]
 	if media == nil {
 		return nil, nil
@@ -400,7 +380,7 @@ func (mb *MockBackend) LastContactName() string {
 }
 
 // MockMedia adds the given media to the mocked backend
-func (mb *MockBackend) MockMedia(media courier.Media) {
+func (mb *MockBackend) MockMedia(media *models.Media) {
 	mb.media[media.URL()] = media
 }
 
@@ -418,8 +398,7 @@ func (mb *MockBackend) ClearChannels() {
 
 // Reset clears our queued messages, seen external IDs, and channel logs
 func (mb *MockBackend) Reset() {
-	mb.lastMsgID = courier.NilMsgID
-	mb.seenExternalIDs = make(map[string]courier.MsgUUID)
+	mb.seenExternalIDs = make(map[string]models.MsgUUID)
 
 	mb.writtenMsgs = nil
 	mb.writtenMsgStatuses = nil

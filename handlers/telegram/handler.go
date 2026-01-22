@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/nyaruka/courier"
+	"github.com/nyaruka/courier/core/models"
 	"github.com/nyaruka/courier/handlers"
 	"github.com/nyaruka/courier/utils"
 	"github.com/nyaruka/gocommon/jsonx"
@@ -38,7 +39,7 @@ type handler struct {
 }
 
 func newHandler() courier.ChannelHandler {
-	return &handler{handlers.NewBaseHandler(courier.ChannelType("TG"), "Telegram")}
+	return &handler{handlers.NewBaseHandler(models.ChannelType("TG"), "Telegram")}
 }
 
 // Initialize is called by the engine once everything is loaded
@@ -72,7 +73,7 @@ func (h *handler) receiveMessage(ctx context.Context, channel courier.Channel, w
 
 	// this is a start command, trigger a new conversation
 	if text == "/start" {
-		event := h.Backend().NewChannelEvent(channel, courier.EventTypeNewConversation, urn, clog).WithContactName(name).WithOccurredOn(date)
+		event := h.Backend().NewChannelEvent(channel, models.EventTypeNewConversation, urn, clog).WithContactName(name).WithOccurredOn(date)
 		err = h.Backend().WriteChannelEvent(ctx, event, clog)
 		if err != nil {
 			return nil, err
@@ -159,7 +160,7 @@ func (h *handler) sendMsgPart(msg courier.MsgOut, token, path string, form url.V
 	}
 	req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
 
-	resp, respBody, _ := h.RequestHTTP(req, clog)
+	resp, respBody, err := h.RequestHTTP(req, clog)
 	if err != nil || resp.StatusCode/100 == 5 {
 		return "", courier.ErrConnectionFailed
 	}
@@ -168,7 +169,7 @@ func (h *handler) sendMsgPart(msg courier.MsgOut, token, path string, form url.V
 	err = json.Unmarshal(respBody, response)
 
 	if err != nil || resp.StatusCode/100 != 2 || !response.Ok {
-		if response.ErrorCode == 403 && response.Description == "Forbidden: bot was blocked by the user" {
+		if response.ErrorCode == 403 && (response.Description == "Forbidden: bot was blocked by the user" || response.Description == "Forbidden: user is deactivated") {
 			return "", courier.ErrContactStopped
 		} else if response.ErrorCode > 0 {
 			return "", courier.ErrFailedWithReason(strconv.Itoa(response.ErrorCode), response.Description)
@@ -184,7 +185,7 @@ func (h *handler) sendMsgPart(msg courier.MsgOut, token, path string, form url.V
 }
 
 func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.SendResult, clog *courier.ChannelLog) error {
-	authToken := msg.Channel().StringConfigForKey(courier.ConfigAuthToken, "")
+	authToken := msg.Channel().StringConfigForKey(models.ConfigAuthToken, "")
 	if authToken == "" {
 		return courier.ErrChannelConfig
 	}
@@ -300,7 +301,7 @@ type fileResponse struct {
 }
 
 func (h *handler) resolveFileID(ctx context.Context, channel courier.Channel, fileID string, clog *courier.ChannelLog) (string, error) {
-	confAuth := channel.ConfigForKey(courier.ConfigAuthToken, "")
+	confAuth := channel.ConfigForKey(models.ConfigAuthToken, "")
 	authToken, isStr := confAuth.(string)
 	if !isStr || authToken == "" {
 		return "", fmt.Errorf("invalid auth token config")

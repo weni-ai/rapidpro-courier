@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nyaruka/courier"
+	"github.com/nyaruka/courier/core/models"
 	"github.com/nyaruka/courier/handlers"
 	"github.com/nyaruka/courier/utils/clogs"
 	"github.com/nyaruka/gocommon/urns"
@@ -24,7 +25,7 @@ type handler struct {
 }
 
 func newHandler() courier.ChannelHandler {
-	return &handler{handlers.NewBaseHandler(courier.ChannelType("MG"), "Messangi")}
+	return &handler{handlers.NewBaseHandler(models.ChannelType("MG"), "Messangi")}
 }
 
 type moPayload struct {

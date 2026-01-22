@@ -13,6 +13,7 @@ import (
 	"github.com/buger/jsonparser"
 	"github.com/gomodule/redigo/redis"
 	"github.com/nyaruka/courier"
+	"github.com/nyaruka/courier/core/models"
 	"github.com/nyaruka/courier/handlers"
 	"github.com/nyaruka/gocommon/jsonx"
 	"github.com/nyaruka/gocommon/urns"
@@ -43,7 +44,7 @@ type handler struct {
 
 func newHandler() courier.ChannelHandler {
 	return &handler{
-		BaseHandler:     handlers.NewBaseHandler(courier.ChannelType("FCM"), "Firebase", handlers.WithRedactConfigKeys(configKey)),
+		BaseHandler:     handlers.NewBaseHandler(models.ChannelType("FCM"), "Firebase", handlers.WithRedactConfigKeys(configKey)),
 		fetchTokenMutex: sync.Mutex{},
 	}
 }
@@ -169,96 +170,14 @@ type mtNotification struct {
 }
 
 func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.SendResult, clog *courier.ChannelLog) error {
-	fcmKey := msg.Channel().StringConfigForKey(configKey, "")
-
-	if fcmKey != "" {
-		return h.sendWithAPIKey(msg, res, clog)
-	}
-
-	return h.sendWithCredsJSON(msg, res, clog)
-}
-
-func (h *handler) sendWithAPIKey(msg courier.MsgOut, res *courier.SendResult, clog *courier.ChannelLog) error {
-	title := msg.Channel().StringConfigForKey(configTitle, "")
-	fcmKey := msg.Channel().StringConfigForKey(configKey, "")
-	if title == "" || fcmKey == "" {
-		return courier.ErrChannelConfig
-	}
-
-	configNotification := msg.Channel().ConfigForKey(configNotification, false)
-	notification, _ := configNotification.(bool)
-	msgParts := make([]string, 0)
-	if msg.Text() != "" {
-		msgParts = handlers.SplitMsgByChannel(msg.Channel(), handlers.GetTextAndAttachments(msg), maxMsgLength)
-	}
-
-	for i, part := range msgParts {
-		payload := mtAPIKeyPayload{}
-
-		payload.Data.Type = "rapidpro"
-		payload.Data.Title = title
-		payload.Data.Message = part
-		payload.Data.MessageID = int64(msg.ID())
-		if msg.Session() != nil {
-			payload.Data.SessionStatus = msg.Session().Status
-		}
-
-		// include any quick replies on the last piece we send
-		if i == len(msgParts)-1 {
-			payload.Data.QuickReplies = handlers.TextOnlyQuickReplies(msg.QuickReplies())
-		}
-
-		payload.To = msg.URNAuth()
-		payload.Priority = "high"
-
-		if notification {
-			payload.Notification = &mtNotification{
-				Title: title,
-				Body:  part,
-			}
-			payload.ContentAvailable = true
-		}
-
-		jsonPayload := jsonx.MustMarshal(payload)
-
-		req, err := http.NewRequest(http.MethodPost, sendURL, bytes.NewReader(jsonPayload))
-		if err != nil {
-			return err
-		}
-
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Accept", "application/json")
-		req.Header.Set("Authorization", fmt.Sprintf("key=%s", fcmKey))
-
-		resp, respBody, err := h.RequestHTTP(req, clog)
-		if err != nil || resp.StatusCode/100 == 5 {
-			return courier.ErrConnectionFailed
-		} else if resp.StatusCode/100 != 2 {
-			return courier.ErrResponseStatus
-		}
-
-		// was this successful
-		success, _ := jsonparser.GetInt(respBody, "success")
-		if success != 1 {
-			return courier.ErrResponseContent
-		}
-
-		externalID, err := jsonparser.GetInt(respBody, "multicast_id")
-		if err != nil {
-			return courier.ErrResponseContent
-		}
-		res.AddExternalID(fmt.Sprintf("%d", externalID))
-
-	}
-
-	return nil
-}
-
-func (h *handler) sendWithCredsJSON(msg courier.MsgOut, res *courier.SendResult, clog *courier.ChannelLog) error {
 	title := msg.Channel().StringConfigForKey(configTitle, "")
 	credentialsJSONRaw := msg.Channel().ConfigForKey(configCredentialsFile, nil)
 	credentialsJSON, _ := credentialsJSONRaw.(map[string]any)
 	if credentialsJSON == nil {
+		oldConfigKey := msg.Channel().StringConfigForKey(configKey, "")
+		if oldConfigKey != "" {
+			return courier.ErrFailedWithReason("", "Error with config missing currently supported FCM authentication JSON")
+		}
 		return courier.ErrChannelConfig
 	}
 	projectID := credentialsJSON["project_id"].(string)
@@ -282,7 +201,7 @@ func (h *handler) sendWithCredsJSON(msg courier.MsgOut, res *courier.SendResult,
 		payload.Message.Data.Type = "rapidpro"
 		payload.Message.Data.Title = title
 		payload.Message.Data.Message = part
-		payload.Message.Data.MessageID = msg.ID().String()
+		payload.Message.Data.MessageID = string(msg.UUID())
 		if msg.Session() != nil {
 			payload.Message.Data.SessionStatus = msg.Session().Status
 		}

@@ -22,12 +22,13 @@ import (
 	cwtypes "github.com/aws/aws-sdk-go-v2/service/cloudwatch/types"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/gomodule/redigo/redis"
-	"github.com/jmoiron/sqlx"
 	"github.com/nyaruka/courier"
-	"github.com/nyaruka/courier/queue"
+	"github.com/nyaruka/courier/core/models"
+	"github.com/nyaruka/courier/runtime"
+	"github.com/nyaruka/courier/utils"
+	"github.com/nyaruka/courier/utils/queue"
 	"github.com/nyaruka/gocommon/aws/cwatch"
 	"github.com/nyaruka/gocommon/aws/dynamo"
-	"github.com/nyaruka/gocommon/aws/s3x"
 	"github.com/nyaruka/gocommon/cache"
 	"github.com/nyaruka/gocommon/dbutil"
 	"github.com/nyaruka/gocommon/httpx"
@@ -38,34 +39,28 @@ import (
 	"github.com/nyaruka/vkutil"
 )
 
-// the name for our message queue
-const msgQueueName = "msgs"
+const (
+	appNodesRunningKey = "app-nodes:running"
 
-// our timeout for backend operations
-const backendTimeout = time.Second * 20
+	// the name for our message queue
+	msgQueueName = "msgs"
+
+	// our timeout for backend operations
+	backendTimeout = time.Second * 20
+)
 
 var uuidRegex = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
 
-func init() {
-	courier.RegisterBackend("rapidpro", newBackend)
-}
-
 type backend struct {
-	config *courier.Config
+	rt *runtime.Runtime
+
+	systemUserID models.UserID
 
 	statusWriter *StatusWriter
-	dynamoWriter *DynamoWriter // all logs being written to dynamo
 	writerWG     *sync.WaitGroup
 
-	db           *sqlx.DB
-	rp           *redis.Pool
-	dynamo       *dynamo.Table[DynamoKey, DynamoItem]
-	s3           *s3x.Service
-	cw           *cwatch.Service
-	systemUserID UserID
-
-	channelsByUUID *cache.Local[courier.ChannelUUID, *Channel]
-	channelsByAddr *cache.Local[courier.ChannelAddress, *Channel]
+	channelsByUUID *cache.Local[models.ChannelUUID, *models.Channel]
+	channelsByAddr *cache.Local[models.ChannelAddress, *models.Channel]
 
 	stopChan  chan bool
 	waitGroup *sync.WaitGroup
@@ -82,7 +77,7 @@ type backend struct {
 	receivedMsgs        *vkutil.IntervalHash // using content hash
 
 	// tracking of sent message ids to avoid dupe sends
-	sentIDs *vkutil.IntervalSet
+	sentMsgs *vkutil.IntervalSet // using msg UUID
 
 	// tracking of external ids of messages we've sent in case we need one before its status update has been written
 	sentExternalIDs *vkutil.IntervalHash
@@ -96,7 +91,7 @@ type backend struct {
 }
 
 // NewBackend creates a new RapidPro backend
-func newBackend(cfg *courier.Config) courier.Backend {
+func NewBackend(rt *runtime.Runtime) courier.Backend {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.MaxIdleConns = 64
 	transport.MaxIdleConnsPerHost = 8
@@ -108,10 +103,10 @@ func newBackend(cfg *courier.Config) courier.Backend {
 	insecureTransport.IdleConnTimeout = 15 * time.Second
 	insecureTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 
-	disallowedIPs, disallowedNets, _ := cfg.ParseDisallowedNetworks()
+	disallowedIPs, disallowedNets, _ := rt.Config.ParseDisallowedNetworks()
 
 	return &backend{
-		config: cfg,
+		rt: rt,
 
 		httpClient:         &http.Client{Transport: transport, Timeout: 30 * time.Second},
 		httpClientInsecure: &http.Client{Transport: insecureTransport, Timeout: 30 * time.Second},
@@ -127,7 +122,7 @@ func newBackend(cfg *courier.Config) courier.Backend {
 
 		receivedMsgs:        vkutil.NewIntervalHash("seen-msgs", time.Second*2, 2),        // 2 - 4 seconds
 		receivedExternalIDs: vkutil.NewIntervalHash("seen-external-ids", time.Hour*24, 2), // 24 - 48 hours
-		sentIDs:             vkutil.NewIntervalSet("sent-ids", time.Hour, 2),              // 1 - 2 hours
+		sentMsgs:            vkutil.NewIntervalSet("sent-msgs", time.Hour, 2),             // 1 - 2 hours
 		sentExternalIDs:     vkutil.NewIntervalHash("sent-external-ids", time.Hour, 2),    // 1 - 2 hours
 
 		stats: NewStatsCollector(),
@@ -136,87 +131,72 @@ func newBackend(cfg *courier.Config) courier.Backend {
 
 // Start starts our RapidPro backend, this tests our various connections and starts our spool flushers
 func (b *backend) Start() error {
+	log := slog.With("comp", "backend")
+	log.Info("backend starting")
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// parse and test our redis config
-	log := slog.With("comp", "backend", "state", "starting")
-	log.Info("starting backend")
-
-	// build our db
-	db, err := sqlx.Open("postgres", b.config.DB)
-	if err != nil {
-		return fmt.Errorf("unable to open DB with config: '%s': %s", b.config.DB, err)
-	}
-
-	// configure our pool
-	b.db = db
-	b.db.SetMaxIdleConns(4)
-	b.db.SetMaxOpenConns(16)
-
-	// try connecting
-	if err := b.db.PingContext(ctx); err != nil {
+	// test Postgres
+	if err := b.rt.DB.PingContext(ctx); err != nil {
 		log.Error("db not reachable", "error", err)
 	} else {
 		log.Info("db ok")
 	}
 
-	b.rp, err = vkutil.NewPool(b.config.Valkey, vkutil.WithMaxActive(b.config.MaxWorkers*2))
-	if err != nil {
-		log.Error("valkey not reachable", "error", err)
-	} else {
-		log.Info("valkey ok")
-	}
-
-	// start our dethrottler if we are going to be doing some sending
-	if b.config.MaxWorkers > 0 {
-		queue.StartDethrottler(b.rp, b.stopChan, b.waitGroup, msgQueueName)
-	}
-
-	// setup DynamoDB main table
-	dc, err := dynamo.NewClient(b.config.AWSAccessKeyID, b.config.AWSSecretAccessKey, b.config.DynamoAWSRegion, b.config.DynamoEndpoint)
-	if err != nil {
-		return err
-	}
-	b.dynamo = dynamo.NewTable[DynamoKey, DynamoItem](dc, b.config.DynamoTablePrefix+"Main")
-
-	if err := b.dynamo.Test(ctx); err != nil {
+	// test DynamoDB
+	if err := dynamo.Test(ctx, b.rt.Dynamo, b.rt.Config.DynamoTablePrefix+"Main"); err != nil {
 		log.Error("dynamodb not reachable", "error", err)
 	} else {
 		log.Info("dynamodb ok")
 	}
 
-	// setup S3 storage
-	b.s3, err = s3x.NewService(b.config.AWSAccessKeyID, b.config.AWSSecretAccessKey, b.config.AWSRegion, b.config.S3Endpoint, b.config.S3Minio)
-	if err != nil {
-		return err
+	// test Valkey
+	vc := b.rt.VK.Get()
+	defer vc.Close()
+	if _, err := vc.Do("PING"); err != nil {
+		log.Error("valkey not reachable", "error", err)
+	} else {
+		log.Info("valkey ok")
 	}
 
-	b.cw, err = cwatch.NewService(b.config.AWSAccessKeyID, b.config.AWSSecretAccessKey, b.config.AWSRegion, b.config.CloudwatchNamespace, b.config.DeploymentID)
-	if err != nil {
-		return err
-	}
-
-	// check attachment bucket access
-	if err := b.s3.Test(ctx, b.config.S3AttachmentsBucket); err != nil {
+	// test S3 bucket access
+	if err := b.rt.S3.Test(ctx, b.rt.Config.S3AttachmentsBucket); err != nil {
 		log.Error("attachments bucket not accessible", "error", err)
 	} else {
 		log.Info("attachments bucket ok")
 	}
 
+	if err := b.rt.Start(); err != nil {
+		return fmt.Errorf("error starting runtime: %w", err)
+	} else {
+		log.Info("runtime started")
+	}
+
+	var err error
+
+	// start our dethrottler if we are going to be doing some sending
+	if b.rt.Config.MaxWorkers > 0 {
+		queue.StartDethrottler(b.rt.VK, b.stopChan, b.waitGroup, msgQueueName)
+	}
+
 	// create and start channel caches...
-	b.channelsByUUID = cache.NewLocal(b.loadChannelByUUID, time.Minute)
+	b.channelsByUUID = cache.NewLocal(func(ctx context.Context, uuid models.ChannelUUID) (*models.Channel, error) {
+		return models.GetChannelByUUID(ctx, b.rt, uuid)
+	}, time.Minute)
 	b.channelsByUUID.Start()
-	b.channelsByAddr = cache.NewLocal(b.loadChannelByAddress, time.Minute)
+	b.channelsByAddr = cache.NewLocal(func(ctx context.Context, addr models.ChannelAddress) (*models.Channel, error) {
+		return models.GetChannelByAddress(ctx, b.rt, addr)
+	}, time.Minute)
 	b.channelsByAddr.Start()
 
 	// make sure our spool dirs are writable
-	err = courier.EnsureSpoolDirPresent(b.config.SpoolDir, "msgs")
+	err = courier.EnsureSpoolDirPresent(b.rt.Config.SpoolDir, "msgs")
 	if err == nil {
-		err = courier.EnsureSpoolDirPresent(b.config.SpoolDir, "statuses")
+		err = courier.EnsureSpoolDirPresent(b.rt.Config.SpoolDir, "statuses")
 	}
 	if err == nil {
-		err = courier.EnsureSpoolDirPresent(b.config.SpoolDir, "events")
+		err = courier.EnsureSpoolDirPresent(b.rt.Config.SpoolDir, "events")
 	}
 	if err != nil {
 		log.Error("spool directories not writable", "error", err)
@@ -225,26 +205,58 @@ func (b *backend) Start() error {
 	}
 
 	// create our batched writers and start them
-	b.statusWriter = NewStatusWriter(b, b.config.SpoolDir, b.writerWG)
-	b.statusWriter.Start()
-
-	b.dynamoWriter = NewDynamoWriter(b.dynamo, b.writerWG)
-	b.dynamoWriter.Start()
+	b.statusWriter = NewStatusWriter(b, b.rt.Config.SpoolDir)
+	b.statusWriter.Start(b.writerWG)
 
 	// store the system user id
-	b.systemUserID, err = getSystemUserID(ctx, b.db)
+	b.systemUserID, err = models.GetSystemUserID(ctx, b.rt.DB)
 	if err != nil {
 		return err
 	}
 
 	// register and start our spool flushers
-	courier.RegisterFlusher(path.Join(b.config.SpoolDir, "msgs"), b.flushMsgFile)
-	courier.RegisterFlusher(path.Join(b.config.SpoolDir, "statuses"), b.flushStatusFile)
-	courier.RegisterFlusher(path.Join(b.config.SpoolDir, "events"), b.flushChannelEventFile)
+	courier.RegisterFlusher(path.Join(b.rt.Config.SpoolDir, "msgs"), b.flushMsgFile)
+	courier.RegisterFlusher(path.Join(b.rt.Config.SpoolDir, "statuses"), b.flushStatusFile)
+	courier.RegisterFlusher(path.Join(b.rt.Config.SpoolDir, "events"), b.flushChannelEventFile)
 
 	b.startMetricsReporter(time.Minute)
 
-	slog.Info("backend started", "comp", "backend", "state", "started")
+	if err := b.checkLastShutdown(ctx); err != nil {
+		return err
+	}
+
+	log.Info("backend started")
+	return nil
+}
+
+func (b *backend) checkLastShutdown(ctx context.Context) error {
+	nodeID := fmt.Sprintf("courier:%s", b.rt.Config.InstanceID)
+	vc := b.rt.VK.Get()
+	defer vc.Close()
+
+	exists, err := redis.Bool(redis.DoContext(vc, ctx, "HEXISTS", appNodesRunningKey, nodeID))
+	if err != nil {
+		return fmt.Errorf("error checking last shutdown: %w", err)
+	}
+
+	if exists {
+		slog.Error("node did not shutdown cleanly last time")
+	} else {
+		if _, err := redis.DoContext(vc, ctx, "HSET", appNodesRunningKey, nodeID, time.Now().UTC().Format(time.RFC3339)); err != nil {
+			return fmt.Errorf("error setting app node state: %w", err)
+		}
+	}
+	return nil
+}
+
+func (b *backend) recordShutdown(ctx context.Context) error {
+	nodeID := fmt.Sprintf("courier:%s", b.rt.Config.InstanceID)
+	vc := b.rt.VK.Get()
+	defer vc.Close()
+
+	if _, err := redis.DoContext(vc, ctx, "HDEL", appNodesRunningKey, nodeID); err != nil {
+		return fmt.Errorf("error recording shutdown: %w", err)
+	}
 	return nil
 }
 
@@ -282,6 +294,9 @@ func (b *backend) startMetricsReporter(interval time.Duration) {
 
 // Stop stops our RapidPro backend, closing our db and redis connections
 func (b *backend) Stop() error {
+	log := slog.With("comp", "backend")
+	log.Info("backend stopping")
+
 	// close our stop channel
 	close(b.stopChan)
 
@@ -291,30 +306,26 @@ func (b *backend) Stop() error {
 	// wait for our threads to exit
 	b.waitGroup.Wait()
 
-	return nil
-}
-
-func (b *backend) Cleanup() error {
 	// stop our batched writers
 	if b.statusWriter != nil {
 		b.statusWriter.Stop()
-	}
-	if b.dynamoWriter != nil {
-		b.dynamoWriter.Stop()
 	}
 
 	// wait for them to flush fully
 	b.writerWG.Wait()
 
-	// close our db and redis pool
-	if b.db != nil {
-		b.db.Close()
+	b.rt.Stop()
+
+	if err := b.recordShutdown(context.TODO()); err != nil {
+		return fmt.Errorf("error recording shutdown: %w", err)
 	}
-	return b.rp.Close()
+
+	log.Info("backend stopped")
+	return nil
 }
 
 // GetChannel returns the channel for the passed in type and UUID
-func (b *backend) GetChannel(ctx context.Context, typ courier.ChannelType, uuid courier.ChannelUUID) (courier.Channel, error) {
+func (b *backend) GetChannel(ctx context.Context, typ models.ChannelType, uuid models.ChannelUUID) (courier.Channel, error) {
 	timeout, cancel := context.WithTimeout(ctx, backendTimeout)
 	defer cancel()
 
@@ -323,15 +334,15 @@ func (b *backend) GetChannel(ctx context.Context, typ courier.ChannelType, uuid 
 		return nil, err // so we don't return a non-nil interface and nil ptr
 	}
 
-	if typ != courier.AnyChannelType && ch.ChannelType() != typ {
-		return nil, courier.ErrChannelWrongType
+	if typ != models.AnyChannelType && ch.ChannelType() != typ {
+		return nil, models.ErrChannelWrongType
 	}
 
 	return ch, nil
 }
 
 // GetChannelByAddress returns the channel with the passed in type and address
-func (b *backend) GetChannelByAddress(ctx context.Context, typ courier.ChannelType, address courier.ChannelAddress) (courier.Channel, error) {
+func (b *backend) GetChannelByAddress(ctx context.Context, typ models.ChannelType, address models.ChannelAddress) (courier.Channel, error) {
 	timeout, cancel := context.WithTimeout(ctx, backendTimeout)
 	defer cancel()
 
@@ -340,8 +351,8 @@ func (b *backend) GetChannelByAddress(ctx context.Context, typ courier.ChannelTy
 		return nil, err // so we don't return a non-nil interface and nil ptr
 	}
 
-	if typ != courier.AnyChannelType && ch.ChannelType() != typ {
-		return nil, courier.ErrChannelWrongType
+	if typ != models.AnyChannelType && ch.ChannelType() != typ {
+		return nil, models.ErrChannelWrongType
 	}
 
 	return ch, nil
@@ -349,19 +360,19 @@ func (b *backend) GetChannelByAddress(ctx context.Context, typ courier.ChannelTy
 
 // GetContact returns the contact for the passed in channel and URN
 func (b *backend) GetContact(ctx context.Context, c courier.Channel, urn urns.URN, authTokens map[string]string, name string, allowCreate bool, clog *courier.ChannelLog) (courier.Contact, error) {
-	dbChannel := c.(*Channel)
+	dbChannel := c.(*models.Channel)
 	return contactForURN(ctx, b, dbChannel.OrgID_, dbChannel, urn, authTokens, name, allowCreate, clog)
 }
 
 // AddURNtoContact adds a URN to the passed in contact
 func (b *backend) AddURNtoContact(ctx context.Context, c courier.Channel, contact courier.Contact, urn urns.URN, authTokens map[string]string) (urns.URN, error) {
-	tx, err := b.db.BeginTxx(ctx, nil)
+	tx, err := b.rt.DB.BeginTxx(ctx, nil)
 	if err != nil {
 		return urns.NilURN, err
 	}
-	dbChannel := c.(*Channel)
-	dbContact := contact.(*Contact)
-	_, err = getOrCreateContactURN(tx, dbChannel, dbContact.ID_, urn, authTokens)
+	dbChannel := c.(*models.Channel)
+	dbContact := contact.(*models.Contact)
+	_, err = models.GetOrCreateContactURN(ctx, tx, dbChannel, dbContact.ID_, urn, authTokens)
 	if err != nil {
 		return urns.NilURN, err
 	}
@@ -375,8 +386,8 @@ func (b *backend) AddURNtoContact(ctx context.Context, c courier.Channel, contac
 
 // RemoveURNFromcontact removes a URN from the passed in contact
 func (b *backend) RemoveURNfromContact(ctx context.Context, c courier.Channel, contact courier.Contact, urn urns.URN) (urns.URN, error) {
-	dbContact := contact.(*Contact)
-	_, err := b.db.ExecContext(ctx, `UPDATE contacts_contacturn SET contact_id = NULL WHERE contact_id = $1 AND identity = $2`, dbContact.ID_, urn.Identity().String())
+	dbContact := contact.(*models.Contact)
+	_, err := b.rt.DB.ExecContext(ctx, `UPDATE contacts_contacturn SET contact_id = NULL WHERE contact_id = $1 AND identity = $2`, dbContact.ID_, urn.Identity().String())
 	if err != nil {
 		return urns.NilURN, err
 	}
@@ -385,20 +396,20 @@ func (b *backend) RemoveURNfromContact(ctx context.Context, c courier.Channel, c
 
 // DeleteMsgByExternalID resolves a message external id and quees a task to mailroom to delete it
 func (b *backend) DeleteMsgByExternalID(ctx context.Context, channel courier.Channel, externalID string) error {
-	ch := channel.(*Channel)
-	row := b.db.QueryRowContext(ctx, `SELECT id, contact_id FROM msgs_msg WHERE channel_id = $1 AND external_id = $2 AND direction = 'I'`, ch.ID(), externalID)
+	ch := channel.(*models.Channel)
+	row := b.rt.DB.QueryRowContext(ctx, `SELECT uuid, contact_id FROM msgs_msg WHERE channel_id = $1 AND external_id = $2 AND direction = 'I'`, ch.ID(), externalID)
 
-	var msgID courier.MsgID
-	var contactID ContactID
-	if err := row.Scan(&msgID, &contactID); err != nil && err != sql.ErrNoRows {
+	var msgUUID models.MsgUUID
+	var contactID models.ContactID
+	if err := row.Scan(&msgUUID, &contactID); err != nil && err != sql.ErrNoRows {
 		return fmt.Errorf("error querying deleted msg: %w", err)
 	}
 
-	if msgID != courier.NilMsgID && contactID != NilContactID {
-		rc := b.rp.Get()
+	if msgUUID != "" && contactID != models.NilContactID {
+		rc := b.rt.VK.Get()
 		defer rc.Close()
 
-		if err := queueMsgDeleted(ctx, rc, ch, msgID, contactID); err != nil {
+		if err := queueMsgDeleted(ctx, rc, ch, msgUUID, contactID); err != nil {
 			return fmt.Errorf("error queuing message deleted task: %w", err)
 		}
 	}
@@ -413,42 +424,32 @@ func (b *backend) NewIncomingMsg(ctx context.Context, channel courier.Channel, u
 	text = dbutil.ToValidUTF8(text)
 	extID = dbutil.ToValidUTF8(extID)
 
-	msg := newMsg(MsgIncoming, channel, urn, text, extID, clog)
-	msg.WithReceivedOn(time.Now().UTC())
+	ch := channel.(*models.Channel)
 
-	// check if this message could be a duplicate and if so use the original's UUID
-	if prevUUID := b.checkMsgAlreadyReceived(ctx, msg); prevUUID != courier.NilMsgUUID {
-		msg.UUID_ = prevUUID
-		msg.alreadyWritten = true
-	}
+	msg := models.NewIncomingMsg(ch, urn, text, extID, clog.UUID)
 
-	return msg
+	return &MsgIn{MsgIn: msg, ChannelUUID_: channel.UUID(), URN_: urn, channel: ch}
 }
 
 // PopNextOutgoingMsg pops the next message that needs to be sent
 func (b *backend) PopNextOutgoingMsg(ctx context.Context) (courier.MsgOut, error) {
-	tryToPop := func() (queue.WorkerToken, string, error) {
-		rc := b.rp.Get()
-		defer rc.Close()
-		return queue.PopFromQueue(rc, msgQueueName)
-	}
+	vc := b.rt.VK.Get()
+	defer vc.Close()
 
 	markComplete := func(token queue.WorkerToken) {
-		rc := b.rp.Get()
-		defer rc.Close()
-		if err := queue.MarkComplete(rc, msgQueueName, token); err != nil {
+		if err := queue.MarkComplete(vc, msgQueueName, token); err != nil {
 			slog.Error("error marking queue task complete", "error", err)
 		}
 	}
 
 	// pop the next message off our queue
-	token, msgJSON, err := tryToPop()
+	token, msgJSON, err := queue.PopFromQueue(vc, msgQueueName)
 	if err != nil {
 		return nil, err
 	}
 
 	for token == queue.Retry {
-		token, msgJSON, err = tryToPop()
+		token, msgJSON, err = queue.PopFromQueue(vc, msgQueueName)
 		if err != nil {
 			return nil, err
 		}
@@ -458,70 +459,74 @@ func (b *backend) PopNextOutgoingMsg(ctx context.Context) (courier.MsgOut, error
 		return nil, nil
 	}
 
-	dbMsg := &Msg{}
-	err = json.Unmarshal([]byte(msgJSON), dbMsg)
-	if err != nil {
+	msg := &MsgOut{}
+	if err := json.Unmarshal([]byte(msgJSON), msg); err != nil {
 		markComplete(token)
 		return nil, fmt.Errorf("unable to unmarshal message: %s: %w", string(msgJSON), err)
 	}
 
-	// populate the channel on our db msg
-	channel, err := b.GetChannel(ctx, courier.AnyChannelType, dbMsg.ChannelUUID_)
+	if err := utils.Validate(msg); err != nil {
+		markComplete(token)
+		return nil, fmt.Errorf("queued message failed validation: %s: %w", string(msgJSON), err)
+	}
+
+	// populate the channel on our msg object
+	channel, err := b.GetChannel(ctx, models.AnyChannelType, msg.ChannelUUID_)
 	if err != nil {
 		markComplete(token)
 		return nil, err
 	}
 
-	dbMsg.Direction_ = MsgOutgoing
-	dbMsg.channel = channel.(*Channel)
-	dbMsg.workerToken = token
+	// add some extra info to the popped message
+	msg.channel = channel.(*models.Channel)
+	msg.workerToken = token
 
 	// clear out our seen incoming messages
-	b.clearMsgSeen(ctx, dbMsg)
+	b.clearMsgSeen(ctx, vc, msg)
 
-	return dbMsg, nil
+	return msg, nil
 }
 
 // WasMsgSent returns whether the passed in message has already been sent
-func (b *backend) WasMsgSent(ctx context.Context, id courier.MsgID) (bool, error) {
-	rc := b.rp.Get()
+func (b *backend) WasMsgSent(ctx context.Context, uuid models.MsgUUID) (bool, error) {
+	rc := b.rt.VK.Get()
 	defer rc.Close()
 
-	return b.sentIDs.IsMember(ctx, rc, id.String())
+	return b.sentMsgs.IsMember(ctx, rc, string(uuid))
 }
 
-func (b *backend) ClearMsgSent(ctx context.Context, id courier.MsgID) error {
-	rc := b.rp.Get()
+func (b *backend) ClearMsgSent(ctx context.Context, uuid models.MsgUUID) error {
+	rc := b.rt.VK.Get()
 	defer rc.Close()
 
-	return b.sentIDs.Rem(ctx, rc, id.String())
+	return b.sentMsgs.Rem(ctx, rc, string(uuid))
 }
 
 // OnSendComplete is called when the sender has finished trying to send a message
 func (b *backend) OnSendComplete(ctx context.Context, msg courier.MsgOut, status courier.StatusUpdate, clog *courier.ChannelLog) {
 	log := slog.With("channel", msg.Channel().UUID(), "msg", msg.UUID(), "clog", clog.UUID, "status", status)
 
-	rc := b.rp.Get()
+	rc := b.rt.VK.Get()
 	defer rc.Close()
 
-	dbMsg := msg.(*Msg)
+	m := msg.(*MsgOut)
 
-	if err := queue.MarkComplete(rc, msgQueueName, dbMsg.workerToken); err != nil {
+	if err := queue.MarkComplete(rc, msgQueueName, m.workerToken); err != nil {
 		log.Error("unable to mark queue task complete", "error", err)
 	}
 
 	// if message won't be retried, mark as sent to avoid dupe sends
-	if status.Status() != courier.MsgStatusErrored {
-		if err := b.sentIDs.Add(ctx, rc, msg.ID().String()); err != nil {
+	if status.Status() != models.MsgStatusErrored {
+		if err := b.sentMsgs.Add(ctx, rc, string(msg.UUID())); err != nil {
 			log.Error("unable to mark message sent", "error", err)
 		}
 	}
 
 	// if message was successfully sent, and we have a session timeout, update it
-	wasSuccess := status.Status() == courier.MsgStatusWired || status.Status() == courier.MsgStatusSent || status.Status() == courier.MsgStatusDelivered || status.Status() == courier.MsgStatusRead
-	if wasSuccess && dbMsg.Session_ != nil && dbMsg.Session_.Timeout > 0 {
-		if err := b.insertTimeoutFire(ctx, dbMsg); err != nil {
-			log.Error("unable to update session timeout", "error", err, "session_uuid", dbMsg.Session_.UUID)
+	wasSuccess := status.Status() == models.MsgStatusWired || status.Status() == models.MsgStatusSent || status.Status() == models.MsgStatusDelivered || status.Status() == models.MsgStatusRead
+	if wasSuccess && m.Session_ != nil && m.Session_.Timeout > 0 {
+		if err := b.insertTimeoutFire(ctx, m); err != nil {
+			log.Error("unable to update session timeout", "error", err, "session_uuid", m.Session_.UUID)
 		}
 	}
 
@@ -535,7 +540,13 @@ func (b *backend) OnReceiveComplete(ctx context.Context, ch courier.Channel, eve
 
 // WriteMsg writes the passed in message to our store
 func (b *backend) WriteMsg(ctx context.Context, msg courier.MsgIn, clog *courier.ChannelLog) error {
-	m := msg.(*Msg)
+	m := msg.(*MsgIn)
+
+	// check if this message could be a duplicate and if so steal the original's UUID
+	if prevUUID := b.checkMsgAlreadyReceived(ctx, m); prevUUID != "" {
+		m.UUID_ = prevUUID
+		return nil
+	}
 
 	timeout, cancel := context.WithTimeout(ctx, backendTimeout)
 	defer cancel()
@@ -550,22 +561,22 @@ func (b *backend) WriteMsg(ctx context.Context, msg courier.MsgIn, clog *courier
 }
 
 // NewStatusUpdateForID creates a new Status object for the given message id
-func (b *backend) NewStatusUpdate(channel courier.Channel, id courier.MsgID, status courier.MsgStatus, clog *courier.ChannelLog) courier.StatusUpdate {
-	return newStatusUpdate(channel, id, "", status, clog)
+func (b *backend) NewStatusUpdate(channel courier.Channel, uuid models.MsgUUID, status models.MsgStatus, clog *courier.ChannelLog) courier.StatusUpdate {
+	return newStatusUpdate(channel, uuid, "", status, clog)
 }
 
 // NewStatusUpdateForID creates a new Status object for the given message id
-func (b *backend) NewStatusUpdateByExternalID(channel courier.Channel, externalID string, status courier.MsgStatus, clog *courier.ChannelLog) courier.StatusUpdate {
-	return newStatusUpdate(channel, courier.NilMsgID, externalID, status, clog)
+func (b *backend) NewStatusUpdateByExternalID(channel courier.Channel, externalID string, status models.MsgStatus, clog *courier.ChannelLog) courier.StatusUpdate {
+	return newStatusUpdate(channel, "", externalID, status, clog)
 }
 
 // WriteStatusUpdate writes the passed in MsgStatus to our store
 func (b *backend) WriteStatusUpdate(ctx context.Context, status courier.StatusUpdate) error {
-	log := slog.With("msg_id", status.MsgID(), "msg_external_id", status.ExternalID(), "status", status.Status())
-	su := status.(*StatusUpdate)
+	log := slog.With("msg_uuid", status.MsgUUID(), "msg_external_id", status.ExternalID(), "status", status.Status())
+	su := status.(*models.StatusUpdate)
 
-	if status.MsgID() == courier.NilMsgID && status.ExternalID() == "" {
-		return errors.New("message status with no id or external id")
+	if status.MsgUUID() == "" && status.ExternalID() == "" {
+		return errors.New("message status with no UUID or external id")
 	}
 
 	// if we have a URN update, do that
@@ -577,21 +588,21 @@ func (b *backend) WriteStatusUpdate(ctx context.Context, status courier.StatusUp
 		}
 	}
 
-	if status.MsgID() != courier.NilMsgID {
+	if status.MsgUUID() != "" {
 		// this is a message we've just sent and were given an external id for
 		if status.ExternalID() != "" {
-			rc := b.rp.Get()
+			rc := b.rt.VK.Get()
 			defer rc.Close()
 
-			err := b.sentExternalIDs.Set(ctx, rc, fmt.Sprintf("%d|%s", su.ChannelID_, su.ExternalID_), fmt.Sprintf("%d", status.MsgID()))
+			err := b.sentExternalIDs.Set(ctx, rc, fmt.Sprintf("%d|%s", su.ChannelID_, su.ExternalID_), string(status.MsgUUID()))
 			if err != nil {
 				log.Error("error recording external id", "error", err)
 			}
 		}
 
 		// we sent a message that errored so clear our sent flag to allow it to be retried
-		if status.Status() == courier.MsgStatusErrored {
-			err := b.ClearMsgSent(ctx, status.MsgID())
+		if status.Status() == models.MsgStatusErrored {
+			err := b.ClearMsgSent(ctx, status.MsgUUID())
 			if err != nil {
 				log.Error("error clearing sent flags", "error", err)
 			}
@@ -599,7 +610,7 @@ func (b *backend) WriteStatusUpdate(ctx context.Context, status courier.StatusUp
 	}
 
 	// queue the status to written by the batch writer
-	b.statusWriter.Queue(status.(*StatusUpdate))
+	b.statusWriter.Queue(status.(*models.StatusUpdate))
 	log.Debug("status update queued")
 
 	return nil
@@ -610,29 +621,29 @@ func (b *backend) updateContactURN(ctx context.Context, status courier.StatusUpd
 	old, new := status.URNUpdate()
 
 	// retrieve channel
-	channel, err := b.GetChannel(ctx, courier.AnyChannelType, status.ChannelUUID())
+	channel, err := b.GetChannel(ctx, models.AnyChannelType, status.ChannelUUID())
 	if err != nil {
 		return fmt.Errorf("error retrieving channel: %w", err)
 	}
-	dbChannel := channel.(*Channel)
-	tx, err := b.db.BeginTxx(ctx, nil)
+	dbChannel := channel.(*models.Channel)
+	tx, err := b.rt.DB.BeginTxx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	// retrieve the old URN
-	oldContactURN, err := getContactURNByIdentity(tx, dbChannel.OrgID(), old)
+	oldContactURN, err := models.GetContactURNByIdentity(ctx, tx, dbChannel.OrgID(), old)
 	if err != nil {
 		return fmt.Errorf("error retrieving old contact URN: %w", err)
 	}
 	// retrieve the new URN
-	newContactURN, err := getContactURNByIdentity(tx, dbChannel.OrgID(), new)
+	newContactURN, err := models.GetContactURNByIdentity(ctx, tx, dbChannel.OrgID(), new)
 	if err != nil {
 		// only update the old URN path if the new URN doesn't exist
 		if err == sql.ErrNoRows {
 			oldContactURN.Path = new.Path()
 			oldContactURN.Identity = string(new.Identity())
 
-			err = fullyUpdateContactURN(tx, oldContactURN)
+			err = models.UpdateContactURNFully(ctx, tx, oldContactURN)
 			if err != nil {
 				tx.Rollback()
 				return fmt.Errorf("error updating old contact URN: %w", err)
@@ -643,19 +654,19 @@ func (b *backend) updateContactURN(ctx context.Context, status courier.StatusUpd
 	}
 
 	// only update the new URN if it doesn't have an associated contact
-	if newContactURN.ContactID == NilContactID {
+	if newContactURN.ContactID == models.NilContactID {
 		newContactURN.ContactID = oldContactURN.ContactID
 	}
 	// remove contact association from old URN
-	oldContactURN.ContactID = NilContactID
+	oldContactURN.ContactID = models.NilContactID
 
 	// update URNs
-	err = fullyUpdateContactURN(tx, newContactURN)
+	err = models.UpdateContactURNFully(ctx, tx, newContactURN)
 	if err != nil {
 		tx.Rollback()
 		return fmt.Errorf("error updating new contact URN: %w", err)
 	}
-	err = fullyUpdateContactURN(tx, oldContactURN)
+	err = models.UpdateContactURNFully(ctx, tx, oldContactURN)
 	if err != nil {
 		tx.Rollback()
 		return fmt.Errorf("error updating old contact URN: %w", err)
@@ -664,7 +675,7 @@ func (b *backend) updateContactURN(ctx context.Context, status courier.StatusUpd
 }
 
 // NewChannelEvent creates a new channel event with the passed in parameters
-func (b *backend) NewChannelEvent(channel courier.Channel, eventType courier.ChannelEventType, urn urns.URN, clog *courier.ChannelLog) courier.ChannelEvent {
+func (b *backend) NewChannelEvent(channel courier.Channel, eventType models.ChannelEventType, urn urns.URN, clog *courier.ChannelLog) courier.ChannelEvent {
 	return newChannelEvent(channel, eventType, urn, clog)
 }
 
@@ -690,11 +701,11 @@ func (b *backend) SaveAttachment(ctx context.Context, ch courier.Channel, conten
 		filename = fmt.Sprintf("%s.%s", filename, extension)
 	}
 
-	orgID := ch.(*Channel).OrgID()
+	orgID := ch.(*models.Channel).OrgID()
 
 	path := filepath.Join("attachments", strconv.FormatInt(int64(orgID), 10), filename[:4], filename[4:8], filename)
 
-	storageURL, err := b.s3.PutObject(ctx, b.config.S3AttachmentsBucket, path, contentType, data, s3types.ObjectCannedACLPublicRead)
+	storageURL, err := b.rt.S3.PutObject(ctx, b.rt.Config.S3AttachmentsBucket, path, contentType, data, s3types.ObjectCannedACLPublicRead)
 	if err != nil {
 		return "", fmt.Errorf("error saving attachment to storage (bytes=%d): %w", len(data), err)
 	}
@@ -703,7 +714,7 @@ func (b *backend) SaveAttachment(ctx context.Context, ch courier.Channel, conten
 }
 
 // ResolveMedia resolves the passed in attachment URL to a media object
-func (b *backend) ResolveMedia(ctx context.Context, mediaUrl string) (courier.Media, error) {
+func (b *backend) ResolveMedia(ctx context.Context, mediaUrl string) (*models.Media, error) {
 	u, err := url.Parse(mediaUrl)
 	if err != nil {
 		return nil, fmt.Errorf("error parsing media URL: %w", err)
@@ -712,17 +723,17 @@ func (b *backend) ResolveMedia(ctx context.Context, mediaUrl string) (courier.Me
 	mediaUUID := uuidRegex.FindString(u.Path)
 
 	// if hostname isn't our media domain, or path doesn't contain a UUID, don't try to resolve
-	if strings.Replace(u.Hostname(), fmt.Sprintf("%s.", b.config.AWSRegion), "", -1) != b.config.MediaDomain || mediaUUID == "" {
+	if strings.Replace(u.Hostname(), fmt.Sprintf("%s.", b.rt.Config.AWSRegion), "", -1) != b.rt.Config.MediaDomain || mediaUUID == "" {
 		return nil, nil
 	}
 
 	unlock := b.mediaMutexes.Lock(mediaUUID)
 	defer unlock()
 
-	rc := b.rp.Get()
+	rc := b.rt.VK.Get()
 	defer rc.Close()
 
-	var media *Media
+	var media *models.Media
 	mediaJSON, err := b.mediaCache.Get(ctx, rc, mediaUUID)
 	if err != nil {
 		return nil, fmt.Errorf("error looking up cached media: %w", err)
@@ -731,7 +742,7 @@ func (b *backend) ResolveMedia(ctx context.Context, mediaUrl string) (courier.Me
 		jsonx.MustUnmarshal([]byte(mediaJSON), &media)
 	} else {
 		// lookup media in our database
-		media, err = lookupMediaFromUUID(ctx, b.db, uuids.UUID(mediaUUID))
+		media, err = models.LoadMediaByUUID(ctx, b.rt.DB, uuids.UUID(mediaUUID))
 		if err != nil {
 			return nil, fmt.Errorf("error looking up media: %w", err)
 		}
@@ -741,7 +752,7 @@ func (b *backend) ResolveMedia(ctx context.Context, mediaUrl string) (courier.Me
 	}
 
 	// if we found a media record but it doesn't match the URL, don't use it
-	if media == nil || (media.URL() != mediaUrl && media.URL() != strings.Replace(mediaUrl, fmt.Sprintf("%s.", b.config.AWSRegion), "", -1)) {
+	if media == nil || (media.URL() != mediaUrl && media.URL() != strings.Replace(mediaUrl, fmt.Sprintf("%s.", b.rt.Config.AWSRegion), "", -1)) {
 		return nil, nil
 	}
 
@@ -763,7 +774,7 @@ func (b *backend) HttpAccess() *httpx.AccessConfig {
 func (b *backend) Health() string {
 	// test redis
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	rc, redisErr := b.rp.GetContext(ctx)
+	rc, redisErr := b.rt.VK.GetContext(ctx)
 	cancel()
 
 	if redisErr == nil {
@@ -773,7 +784,7 @@ func (b *backend) Health() string {
 
 	// test our db
 	ctx, cancel = context.WithTimeout(context.Background(), time.Second)
-	dbErr := b.db.PingContext(ctx)
+	dbErr := b.rt.DB.PingContext(ctx)
 	cancel()
 
 	health := bytes.Buffer{}
@@ -788,10 +799,14 @@ func (b *backend) Health() string {
 }
 
 func (b *backend) reportMetrics(ctx context.Context) (int, error) {
-	metrics := b.stats.Extract().ToMetrics()
+	if b.rt.Config.MetricsReporting == "off" {
+		return 0, nil
+	}
+
+	metrics := b.stats.Extract().ToMetrics(b.rt.Config.MetricsReporting == "advanced")
 
 	// get queue sizes
-	rc := b.rp.Get()
+	rc := b.rt.VK.Get()
 	defer rc.Close()
 	active, err := redis.Strings(rc.Do("ZRANGE", fmt.Sprintf("%s:active", msgQueueName), "0", "-1"))
 	if err != nil {
@@ -822,14 +837,14 @@ func (b *backend) reportMetrics(ctx context.Context) (int, error) {
 	}
 
 	// calculate DB and redis pool metrics
-	dbStats := b.db.Stats()
-	redisStats := b.rp.Stats()
+	dbStats := b.rt.DB.Stats()
+	redisStats := b.rt.VK.Stats()
 	dbWaitDurationInPeriod := dbStats.WaitDuration - b.dbWaitDuration
 	redisWaitDurationInPeriod := redisStats.WaitDuration - b.redisWaitDuration
 	b.dbWaitDuration = dbStats.WaitDuration
 	b.redisWaitDuration = redisStats.WaitDuration
 
-	hostDim := cwatch.Dimension("Host", b.config.InstanceID)
+	hostDim := cwatch.Dimension("Host", b.rt.Config.InstanceID)
 	metrics = append(metrics,
 		cwatch.Datum("DBConnectionsInUse", float64(dbStats.InUse), cwtypes.StandardUnitCount, hostDim),
 		cwatch.Datum("DBConnectionWaitDuration", float64(dbWaitDurationInPeriod)/float64(time.Second), cwtypes.StandardUnitSeconds, hostDim),
@@ -837,9 +852,10 @@ func (b *backend) reportMetrics(ctx context.Context) (int, error) {
 		cwatch.Datum("ValkeyConnectionsWaitDuration", float64(redisWaitDurationInPeriod)/float64(time.Second), cwtypes.StandardUnitSeconds, hostDim),
 		cwatch.Datum("QueuedMsgs", float64(bulkSize), cwtypes.StandardUnitCount, cwatch.Dimension("QueueName", "bulk")),
 		cwatch.Datum("QueuedMsgs", float64(prioritySize), cwtypes.StandardUnitCount, cwatch.Dimension("QueueName", "priority")),
+		cwatch.Datum("DynamoSpooledItems", float64(b.rt.Spool.Size()), cwtypes.StandardUnitCount, hostDim),
 	)
 
-	if err := b.cw.Send(ctx, metrics...); err != nil {
+	if err := b.rt.CW.Send(ctx, metrics...); err != nil {
 		return 0, fmt.Errorf("error sending metrics: %w", err)
 	}
 
@@ -848,7 +864,7 @@ func (b *backend) reportMetrics(ctx context.Context) (int, error) {
 
 // Status returns information on our queue sizes, number of workers etc..
 func (b *backend) Status() string {
-	rc := b.rp.Get()
+	rc := b.rt.VK.Get()
 	defer rc.Close()
 
 	status := bytes.Buffer{}
@@ -890,8 +906,8 @@ func (b *backend) Status() string {
 		tps := parts[1]
 
 		// try to look up our channel
-		channelUUID := courier.ChannelUUID(uuid)
-		channel, err := b.GetChannel(context.Background(), courier.AnyChannelType, channelUUID)
+		channelUUID := models.ChannelUUID(uuid)
+		channel, err := b.GetChannel(context.Background(), models.AnyChannelType, channelUUID)
 		channelType := "!!"
 		if err == nil {
 			channelType = string(channel.ChannelType())
@@ -917,5 +933,5 @@ func (b *backend) Status() string {
 
 // RedisPool returns the redisPool for this backend
 func (b *backend) RedisPool() *redis.Pool {
-	return b.rp
+	return b.rt.VK
 }

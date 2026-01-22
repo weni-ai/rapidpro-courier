@@ -14,10 +14,12 @@ import (
 
 	"github.com/antchfx/xmlquery"
 	"github.com/nyaruka/courier"
+	"github.com/nyaruka/courier/core/models"
 	"github.com/nyaruka/courier/handlers"
 	"github.com/nyaruka/gocommon/gsm7"
 	"github.com/nyaruka/gocommon/jsonx"
 	"github.com/nyaruka/gocommon/urns"
+	"github.com/nyaruka/gocommon/uuids"
 )
 
 const (
@@ -60,7 +62,7 @@ type handler struct {
 }
 
 func newHandler() courier.ChannelHandler {
-	return &handler{handlers.NewBaseHandler(courier.ChannelType("EX"), "External")}
+	return &handler{handlers.NewBaseHandler(models.ChannelType("EX"), "External")}
 }
 
 // Initialize is called by the engine once everything is loaded
@@ -88,7 +90,7 @@ func (h *handler) Initialize(s courier.Server) error {
 }
 
 type stopContactForm struct {
-	From string `validate:"required" name:"from"`
+	From string `name:"from" validate:"required"`
 }
 
 func (h *handler) receiveStopContact(ctx context.Context, channel courier.Channel, w http.ResponseWriter, r *http.Request, clog *courier.ChannelLog) ([]courier.Event, error) {
@@ -110,7 +112,7 @@ func (h *handler) receiveStopContact(ctx context.Context, channel courier.Channe
 	}
 
 	// create a stop channel event
-	channelEvent := h.Backend().NewChannelEvent(channel, courier.EventTypeStopContact, urn, clog)
+	channelEvent := h.Backend().NewChannelEvent(channel, models.EventTypeStopContact, urn, clog)
 	err = h.Backend().WriteChannelEvent(ctx, channelEvent, clog)
 	if err != nil {
 		return nil, err
@@ -240,13 +242,14 @@ func (h *handler) buildStatusHandler(status string) courier.ChannelHandleFunc {
 }
 
 type statusForm struct {
-	ID int64 `name:"id" validate:"required"`
+	ID   string `name:"id"`
+	UUID string `name:"uuid"`
 }
 
-var statusMappings = map[string]courier.MsgStatus{
-	"failed":    courier.MsgStatusFailed,
-	"sent":      courier.MsgStatusSent,
-	"delivered": courier.MsgStatusDelivered,
+var statusMappings = map[string]models.MsgStatus{
+	"failed":    models.MsgStatusFailed,
+	"sent":      models.MsgStatusSent,
+	"delivered": models.MsgStatusDelivered,
 }
 
 // receiveStatus is our HTTP handler function for status updates
@@ -257,6 +260,19 @@ func (h *handler) receiveStatus(ctx context.Context, statusString string, channe
 		return nil, handlers.WriteAndLogRequestError(ctx, h, channel, w, r, err)
 	}
 
+	if form.ID == "" && form.UUID == "" {
+		return nil, handlers.WriteAndLogRequestError(ctx, h, channel, w, r, fmt.Errorf("parameters id or uuid should not be empty"))
+	}
+
+	if !uuids.Is(form.ID) && !uuids.Is(form.UUID) {
+		return nil, handlers.WriteAndLogRequestError(ctx, h, channel, w, r, fmt.Errorf("parsing failed: id '%s' and uuid '%s' are not valid UUIDs", form.ID, form.UUID))
+	}
+
+	msgUUID := form.UUID
+	if msgUUID == "" {
+		msgUUID = form.ID
+	}
+
 	// get our status
 	msgStatus, found := statusMappings[strings.ToLower(statusString)]
 	if !found {
@@ -264,14 +280,14 @@ func (h *handler) receiveStatus(ctx context.Context, statusString string, channe
 	}
 
 	// write our status
-	status := h.Backend().NewStatusUpdate(channel, courier.MsgID(form.ID), msgStatus, clog)
+	status := h.Backend().NewStatusUpdate(channel, models.MsgUUID(msgUUID), msgStatus, clog)
 	return handlers.WriteMsgStatusAndResponse(ctx, h, channel, status, w, r)
 }
 
 func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.SendResult, clog *courier.ChannelLog) error {
 	channel := msg.Channel()
 
-	sendURL := channel.StringConfigForKey(courier.ConfigSendURL, "")
+	sendURL := channel.StringConfigForKey(models.ConfigSendURL, "")
 	if sendURL == "" {
 		return courier.ErrChannelConfig
 	}
@@ -279,10 +295,10 @@ func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.Sen
 	// figure out what encoding to tell kannel to send as
 	encoding := channel.StringConfigForKey(configEncoding, encodingDefault)
 	responseCheck := channel.StringConfigForKey(configMTResponseCheck, "")
-	sendMethod := channel.StringConfigForKey(courier.ConfigSendMethod, http.MethodPost)
-	sendBody := channel.StringConfigForKey(courier.ConfigSendBody, "")
-	sendMaxLength := channel.IntConfigForKey(courier.ConfigMaxLength, 160)
-	contentType := channel.StringConfigForKey(courier.ConfigContentType, contentURLEncoded)
+	sendMethod := channel.StringConfigForKey(models.ConfigSendMethod, http.MethodPost)
+	sendBody := channel.StringConfigForKey(models.ConfigSendBody, "")
+	sendMaxLength := channel.IntConfigForKey(models.ConfigMaxLength, 160)
+	contentType := channel.StringConfigForKey(models.ConfigContentType, contentURLEncoded)
 	contentTypeHeader := contentTypeMappings[contentType]
 	if contentTypeHeader == "" {
 		contentTypeHeader = contentType
@@ -292,7 +308,8 @@ func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.Sen
 	for i, part := range parts {
 		// build our request
 		form := map[string]string{
-			"id":             msg.ID().String(),
+			"id":             string(msg.UUID()), // Deprecated but still used by some external systems
+			"uuid":           string(msg.UUID()),
 			"text":           part,
 			"to":             msg.URN().Path(),
 			"to_no_plus":     strings.TrimPrefix(msg.URN().Path(), "+"),
@@ -305,7 +322,7 @@ func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.Sen
 			form["session_status"] = msg.Session().Status
 		}
 
-		useNationalStr := channel.ConfigForKey(courier.ConfigUseNational, false)
+		useNationalStr := channel.ConfigForKey(models.ConfigUseNational, false)
 		useNational, _ := useNationalStr.(bool)
 
 		// if we are meant to use national formatting (no country code) pull that out
@@ -329,7 +346,7 @@ func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.Sen
 		if i == len(parts)-1 {
 			formEncoded["quick_replies"] = buildQuickRepliesResponse(msg.QuickReplies(), sendMethod, contentURLEncoded)
 		} else {
-			formEncoded["quick_replies"] = buildQuickRepliesResponse([]courier.QuickReply{}, sendMethod, contentURLEncoded)
+			formEncoded["quick_replies"] = buildQuickRepliesResponse([]models.QuickReply{}, sendMethod, contentURLEncoded)
 		}
 		url := replaceVariables(sendURL, formEncoded)
 
@@ -340,7 +357,7 @@ func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.Sen
 			if i == len(parts)-1 {
 				formEncoded["quick_replies"] = buildQuickRepliesResponse(msg.QuickReplies(), sendMethod, contentType)
 			} else {
-				formEncoded["quick_replies"] = buildQuickRepliesResponse([]courier.QuickReply{}, sendMethod, contentType)
+				formEncoded["quick_replies"] = buildQuickRepliesResponse([]models.QuickReply{}, sendMethod, contentType)
 			}
 			body = strings.NewReader(replaceVariables(sendBody, formEncoded))
 		}
@@ -352,12 +369,12 @@ func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.Sen
 		req.Header.Set("Content-Type", contentTypeHeader)
 
 		// TODO can drop this when channels have been migrated to use ConfigSendHeaders
-		authorization := channel.StringConfigForKey(courier.ConfigSendAuthorization, "")
+		authorization := channel.StringConfigForKey(models.ConfigSendAuthorization, "")
 		if authorization != "" {
 			req.Header.Set("Authorization", authorization)
 		}
 
-		headers := channel.ConfigForKey(courier.ConfigSendHeaders, map[string]any{}).(map[string]any)
+		headers := channel.ConfigForKey(models.ConfigSendHeaders, map[string]any{}).(map[string]any)
 		for hKey, hValue := range headers {
 			req.Header.Set(hKey, fmt.Sprint(hValue))
 		}
@@ -382,9 +399,9 @@ type quickReplyXMLItem struct {
 	Value   string   `xml:",chardata"`
 }
 
-func buildQuickRepliesResponse(quickReplies []courier.QuickReply, sendMethod string, contentType string) string {
+func buildQuickRepliesResponse(quickReplies []models.QuickReply, sendMethod string, contentType string) string {
 	if quickReplies == nil {
-		quickReplies = []courier.QuickReply{}
+		quickReplies = []models.QuickReply{}
 	}
 	if (sendMethod == http.MethodPost || sendMethod == http.MethodPut) && contentType == contentJSON {
 		return string(jsonx.MustMarshal(handlers.TextOnlyQuickReplies(quickReplies)))

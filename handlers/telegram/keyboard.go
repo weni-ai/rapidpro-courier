@@ -3,7 +3,7 @@ package telegram
 import (
 	"strings"
 
-	"github.com/nyaruka/courier"
+	"github.com/nyaruka/courier/core/models"
 	"github.com/nyaruka/courier/handlers"
 	"github.com/nyaruka/courier/utils"
 )
@@ -23,7 +23,7 @@ type ReplyKeyboardMarkup struct {
 }
 
 // NewKeyboardFromReplies creates a keyboard from the given quick replies
-func NewKeyboardFromReplies(replies []courier.QuickReply) *ReplyKeyboardMarkup {
+func NewKeyboardFromReplies(replies []models.QuickReply) *ReplyKeyboardMarkup {
 	rows := utils.StringsToRows(handlers.TextOnlyQuickReplies(replies), 5, 30, 2)
 	keyboard := make([][]KeyboardButton, len(rows))
 

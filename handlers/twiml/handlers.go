@@ -12,7 +12,6 @@ import (
 	_ "embed"
 	"encoding/base64"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"net/url"
 	"sort"
@@ -21,6 +20,7 @@ import (
 
 	"github.com/buger/jsonparser"
 	"github.com/nyaruka/courier"
+	"github.com/nyaruka/courier/core/models"
 	"github.com/nyaruka/courier/handlers"
 	"github.com/nyaruka/courier/utils"
 	"github.com/nyaruka/courier/utils/clogs"
@@ -28,6 +28,7 @@ import (
 	"github.com/nyaruka/gocommon/i18n"
 	"github.com/nyaruka/gocommon/jsonx"
 	"github.com/nyaruka/gocommon/urns"
+	"github.com/nyaruka/gocommon/uuids"
 )
 
 const (
@@ -67,7 +68,7 @@ type handler struct {
 	validateSignatures bool
 }
 
-func newTWIMLHandler(channelType courier.ChannelType, name string, validateSignatures bool) courier.ChannelHandler {
+func newTWIMLHandler(channelType models.ChannelType, name string, validateSignatures bool) courier.ChannelHandler {
 	return &handler{handlers.NewBaseHandler(channelType, name), validateSignatures}
 }
 
@@ -106,13 +107,13 @@ type statusForm struct {
 	To            string
 }
 
-var statusMapping = map[string]courier.MsgStatus{
-	"queued":      courier.MsgStatusSent,
-	"failed":      courier.MsgStatusFailed,
-	"sent":        courier.MsgStatusSent,
-	"delivered":   courier.MsgStatusDelivered,
-	"read":        courier.MsgStatusRead,
-	"undelivered": courier.MsgStatusFailed,
+var statusMapping = map[string]models.MsgStatus{
+	"queued":      models.MsgStatusSent,
+	"failed":      models.MsgStatusFailed,
+	"sent":        models.MsgStatusSent,
+	"delivered":   models.MsgStatusDelivered,
+	"read":        models.MsgStatusRead,
+	"undelivered": models.MsgStatusFailed,
 }
 
 // receiveMessage is our HTTP handler function for incoming messages
@@ -175,24 +176,15 @@ func (h *handler) receiveStatus(ctx context.Context, channel courier.Channel, w 
 	}
 
 	// if we are ignoring delivery reports and this isn't failed then move on
-	if channel.BoolConfigForKey(configIgnoreDLRs, false) && msgStatus != courier.MsgStatusFailed {
+	if channel.BoolConfigForKey(configIgnoreDLRs, false) && msgStatus != models.MsgStatusFailed {
 		return nil, handlers.WriteAndLogRequestIgnored(ctx, h, channel, w, r, "ignoring non error delivery report")
 	}
 
-	// if the message id was passed explicitely, use that
 	var status courier.StatusUpdate
-	idString := r.URL.Query().Get("id")
-	if idString != "" {
-		msgID, err := strconv.ParseInt(idString, 10, 64)
-		if err != nil {
-			slog.Error("error converting twilio callback id to integer", "error", err, "id", idString)
-		} else {
-			status = h.Backend().NewStatusUpdate(channel, courier.MsgID(msgID), msgStatus, clog)
-		}
-	}
-
-	// if we have no status, then build it from the external (twilio) id
-	if status == nil {
+	if uuidString := r.URL.Query().Get("uuid"); uuids.Is(uuidString) {
+		// if the message UUID was passed explicitely, use that
+		status = h.Backend().NewStatusUpdate(channel, models.MsgUUID(uuidString), msgStatus, clog)
+	} else {
 		status = h.Backend().NewStatusUpdateByExternalID(channel, form.MessageSID, msgStatus, clog)
 	}
 
@@ -205,7 +197,7 @@ func (h *handler) receiveStatus(ctx context.Context, channel courier.Channel, w 
 			}
 
 			// create a stop channel event
-			channelEvent := h.Backend().NewChannelEvent(channel, courier.EventTypeStopContact, urn, clog)
+			channelEvent := h.Backend().NewChannelEvent(channel, models.EventTypeStopContact, urn, clog)
 			err = h.Backend().WriteChannelEvent(ctx, channelEvent, clog)
 			if err != nil {
 				return nil, err
@@ -213,7 +205,7 @@ func (h *handler) receiveStatus(ctx context.Context, channel courier.Channel, w 
 		}
 		clog.Error(twilioError(errorCode))
 		if errorCode == errorThrottled {
-			status = h.Backend().NewStatusUpdateByExternalID(channel, form.MessageSID, courier.MsgStatusErrored, clog)
+			status = h.Backend().NewStatusUpdateByExternalID(channel, form.MessageSID, models.MsgStatusErrored, clog)
 		}
 	}
 
@@ -223,10 +215,10 @@ func (h *handler) receiveStatus(ctx context.Context, channel courier.Channel, w 
 func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.SendResult, clog *courier.ChannelLog) error {
 	// build our callback URL
 	callbackDomain := msg.Channel().CallbackDomain(h.Server().Config().Domain)
-	callbackURL := fmt.Sprintf("https://%s/c/%s/%s/status?id=%d&action=callback", callbackDomain, strings.ToLower(string(h.ChannelType())), msg.Channel().UUID(), msg.ID())
+	callbackURL := fmt.Sprintf("https://%s/c/%s/%s/status?uuid=%s&action=callback", callbackDomain, strings.ToLower(string(h.ChannelType())), msg.Channel().UUID(), msg.UUID())
 
 	accountSID := msg.Channel().StringConfigForKey(configAccountSID, "")
-	accountToken := msg.Channel().StringConfigForKey(courier.ConfigAuthToken, "")
+	accountToken := msg.Channel().StringConfigForKey(models.ConfigAuthToken, "")
 	if accountSID == "" || accountToken == "" {
 		return courier.ErrChannelConfig
 	}
@@ -430,7 +422,7 @@ func (h *handler) BuildAttachmentRequest(ctx context.Context, b courier.Backend,
 		return nil, fmt.Errorf("missing account sid for %s channel", h.ChannelName())
 	}
 
-	accountToken := channel.StringConfigForKey(courier.ConfigAuthToken, "")
+	accountToken := channel.StringConfigForKey(models.ConfigAuthToken, "")
 	if accountToken == "" {
 		return nil, fmt.Errorf("missing account auth token for %s channel", h.ChannelName())
 	}
@@ -446,7 +438,7 @@ func (h *handler) BuildAttachmentRequest(ctx context.Context, b courier.Backend,
 
 func (h *handler) RedactValues(ch courier.Channel) []string {
 	return []string{
-		httpx.BasicAuth(ch.StringConfigForKey(configAccountSID, ""), ch.StringConfigForKey(courier.ConfigAuthToken, "")),
+		httpx.BasicAuth(ch.StringConfigForKey(configAccountSID, ""), ch.StringConfigForKey(models.ConfigAuthToken, "")),
 	}
 }
 
@@ -492,7 +484,7 @@ func (h *handler) validateSignature(c courier.Channel, r *http.Request) error {
 		return err
 	}
 
-	confAuth := c.ConfigForKey(courier.ConfigAuthToken, "")
+	confAuth := c.ConfigForKey(models.ConfigAuthToken, "")
 	authToken, isStr := confAuth.(string)
 	if !isStr || authToken == "" {
 		return fmt.Errorf("invalid or missing auth token in config")

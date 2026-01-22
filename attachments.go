@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/h2non/filetype"
+	"github.com/nyaruka/courier/core/models"
 	"github.com/nyaruka/courier/utils"
 	"github.com/nyaruka/courier/utils/clogs"
 	"github.com/nyaruka/gocommon/httpx"
@@ -30,10 +31,10 @@ type Attachment struct {
 }
 
 type fetchAttachmentRequest struct {
-	ChannelType ChannelType `json:"channel_type" validate:"required"`
-	ChannelUUID ChannelUUID `json:"channel_uuid" validate:"required,uuid"`
-	URL         string      `json:"url"          validate:"required"`
-	MsgID       MsgID       `json:"msg_id"`
+	ChannelType models.ChannelType `json:"channel_type" validate:"required"`
+	ChannelUUID models.ChannelUUID `json:"channel_uuid" validate:"required,uuid"`
+	URL         string             `json:"url"          validate:"required"`
+	MsgUUID     models.MsgUUID     `json:"msg_uuid"`
 }
 
 type fetchAttachmentResponse struct {
@@ -71,7 +72,7 @@ func fetchAttachment(ctx context.Context, b Backend, r *http.Request) (*fetchAtt
 	}
 
 	if err != nil {
-		return nil, fmt.Errorf("error fetching attachment for msg #%d: %w", fa.MsgID, err)
+		return nil, fmt.Errorf("error fetching attachment for msg %s: %w", fa.MsgUUID, err)
 	}
 
 	return &fetchAttachmentResponse{Attachment: attachment, LogUUID: clog.UUID}, nil

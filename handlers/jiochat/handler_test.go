@@ -16,7 +16,9 @@ import (
 	"time"
 
 	"github.com/nyaruka/courier"
+	"github.com/nyaruka/courier/core/models"
 	. "github.com/nyaruka/courier/handlers"
+	"github.com/nyaruka/courier/runtime"
 	"github.com/nyaruka/courier/test"
 	"github.com/nyaruka/gocommon/httpx"
 	"github.com/nyaruka/gocommon/urns"
@@ -194,7 +196,7 @@ var testCases = []IncomingTestCase{
 		ExpectedRespStatus:   200,
 		ExpectedBodyContains: "Event Accepted",
 		ExpectedEvents: []ExpectedEvent{
-			{Type: courier.EventTypeNewConversation, URN: "jiochat:1234"},
+			{Type: models.EventTypeNewConversation, URN: "jiochat:1234"},
 		},
 	},
 	{
@@ -222,10 +224,6 @@ var testCases = []IncomingTestCase{
 
 func TestIncoming(t *testing.T) {
 	RunIncomingTestCases(t, testChannels, newHandler(), testCases)
-}
-
-func BenchmarkHandler(b *testing.B) {
-	RunChannelBenchmarks(b, testChannels, newHandler(), testCases)
 }
 
 // mocks the call to the Jiochat API
@@ -263,10 +261,10 @@ func newServer(backend courier.Backend) courier.Server {
 	// for benchmarks, log to null
 	logger := slog.Default()
 	log.SetOutput(io.Discard)
-	config := courier.NewDefaultConfig()
-	config.DB = "postgres://courier_test:temba@localhost:5432/courier_test?sslmode=disable"
-	config.Valkey = "valkey://localhost:6379/0"
-	return courier.NewServerWithLogger(config, backend, logger)
+	cfg := runtime.NewDefaultConfig()
+	cfg.DB = "postgres://courier_test:temba@postgres:5432/courier_test?sslmode=disable"
+	cfg.Valkey = "valkey://valkey:6379/0"
+	return courier.NewServerWithLogger(cfg, backend, logger)
 }
 
 func TestDescribeURN(t *testing.T) {

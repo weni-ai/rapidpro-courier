@@ -18,7 +18,7 @@ import (
 	"github.com/buger/jsonparser"
 	"github.com/gomodule/redigo/redis"
 	"github.com/nyaruka/courier"
-	"github.com/nyaruka/courier/backends/rapidpro"
+	"github.com/nyaruka/courier/core/models"
 	"github.com/nyaruka/courier/handlers"
 	"github.com/nyaruka/courier/utils"
 	"github.com/nyaruka/gocommon/httpx"
@@ -52,9 +52,9 @@ var (
 )
 
 func init() {
-	courier.RegisterHandler(newWAHandler(courier.ChannelType(channelTypeWa), "WhatsApp"))
-	courier.RegisterHandler(newWAHandler(courier.ChannelType(channelTypeD3), "360Dialog"))
-	courier.RegisterHandler(newWAHandler(courier.ChannelType(channelTypeTXW), "TextIt"))
+	courier.RegisterHandler(newWAHandler(models.ChannelType(channelTypeWa), "WhatsApp"))
+	courier.RegisterHandler(newWAHandler(models.ChannelType(channelTypeD3), "360Dialog"))
+	courier.RegisterHandler(newWAHandler(models.ChannelType(channelTypeTXW), "TextIt"))
 
 	failedMediaCache = cache.New(15*time.Minute, 15*time.Minute)
 }
@@ -63,7 +63,7 @@ type handler struct {
 	handlers.BaseHandler
 }
 
-func newWAHandler(channelType courier.ChannelType, name string) courier.ChannelHandler {
+func newWAHandler(channelType models.ChannelType, name string) courier.ChannelHandler {
 	return &handler{handlers.NewBaseHandler(channelType, name)}
 }
 
@@ -180,28 +180,6 @@ type eventsPayload struct {
 	} `json:"statuses"`
 }
 
-// checkBlockedContact is a function to verify if the contact from msg has status blocked to return an error or not if it is active
-func checkBlockedContact(payload *eventsPayload, ctx context.Context, channel courier.Channel, h *handler, clog *courier.ChannelLog) error {
-	if len(payload.Contacts) > 0 {
-		if contactURN, err := urns.New(urns.WhatsApp, payload.Contacts[0].WaID); err == nil {
-			if contact, err := h.Backend().GetContact(ctx, channel, contactURN, nil, payload.Contacts[0].Profile.Name, true, clog); err == nil {
-				c, err := json.Marshal(contact)
-				if err != nil {
-					return err
-				}
-				var dbc rapidpro.Contact
-				if err = json.Unmarshal(c, &dbc); err != nil {
-					return err
-				}
-				if dbc.Status_ == "B" {
-					return errors.New("blocked contact sending message")
-				}
-			}
-		}
-	}
-	return nil
-}
-
 // receiveEvents is our HTTP handler function for incoming messages and status updates
 func (h *handler) receiveEvents(ctx context.Context, channel courier.Channel, w http.ResponseWriter, r *http.Request, payload *eventsPayload, clog *courier.ChannelLog) ([]courier.Event, error) {
 	events := make([]courier.Event, 0, 2)
@@ -210,11 +188,6 @@ func (h *handler) receiveEvents(ctx context.Context, channel courier.Channel, w 
 	data := make([]any, 0, 2)
 
 	seenMsgIDs := make(map[string]bool, 2)
-
-	err := checkBlockedContact(payload, ctx, channel, h, clog)
-	if err != nil {
-		return nil, err
-	}
 
 	var contactNames = make(map[string]string)
 	for _, contact := range payload.Contacts {
@@ -344,7 +317,7 @@ func resolveMediaURL(channel courier.Channel, mediaID string) (string, error) {
 		return "", nil
 	}
 
-	urlStr := channel.StringConfigForKey(courier.ConfigBaseURL, "")
+	urlStr := channel.StringConfigForKey(models.ConfigBaseURL, "")
 	url, err := url.Parse(urlStr)
 	if err != nil {
 		return "", fmt.Errorf("invalid base url set for WA channel: %s", err)
@@ -360,7 +333,7 @@ func resolveMediaURL(channel courier.Channel, mediaID string) (string, error) {
 
 // BuildAttachmentRequest to download media for message attachment with Bearer token set
 func (h *handler) BuildAttachmentRequest(ctx context.Context, b courier.Backend, channel courier.Channel, attachmentURL string, clog *courier.ChannelLog) (*http.Request, error) {
-	token := channel.StringConfigForKey(courier.ConfigAuthToken, "")
+	token := channel.StringConfigForKey(models.ConfigAuthToken, "")
 	if token == "" {
 		return nil, fmt.Errorf("missing token for WA channel")
 	}
@@ -373,12 +346,12 @@ func (h *handler) BuildAttachmentRequest(ctx context.Context, b courier.Backend,
 
 var _ courier.AttachmentRequestBuilder = (*handler)(nil)
 
-var waStatusMapping = map[string]courier.MsgStatus{
-	"sending":   courier.MsgStatusWired,
-	"sent":      courier.MsgStatusSent,
-	"delivered": courier.MsgStatusDelivered,
-	"read":      courier.MsgStatusRead,
-	"failed":    courier.MsgStatusFailed,
+var waStatusMapping = map[string]models.MsgStatus{
+	"sending":   models.MsgStatusWired,
+	"sent":      models.MsgStatusSent,
+	"delivered": models.MsgStatusDelivered,
+	"read":      models.MsgStatusRead,
+	"failed":    models.MsgStatusFailed,
 }
 
 var waIgnoreStatuses = map[string]bool{
@@ -551,8 +524,8 @@ const maxMsgLength = 4096
 
 func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.SendResult, clog *courier.ChannelLog) error {
 	// get our token
-	token := msg.Channel().StringConfigForKey(courier.ConfigAuthToken, "")
-	urlStr := msg.Channel().StringConfigForKey(courier.ConfigBaseURL, "")
+	token := msg.Channel().StringConfigForKey(models.ConfigAuthToken, "")
+	urlStr := msg.Channel().StringConfigForKey(models.ConfigBaseURL, "")
 	url, err := url.Parse(urlStr)
 
 	if token == "" || err != nil {
@@ -778,7 +751,7 @@ func buildPayloads(ctx context.Context, msg courier.MsgOut, h *handler, clog *co
 
 			for _, comp := range msg.Templating().Components {
 				// get the variables used by this component in order of their names 1, 2 etc
-				compParams := make([]courier.TemplatingVariable, 0, len(comp.Variables))
+				compParams := make([]models.TemplatingVariable, 0, len(comp.Variables))
 
 				for _, varName := range slices.Sorted(maps.Keys(comp.Variables)) {
 					compParams = append(compParams, msg.Templating().Variables[comp.Variables[varName]])
@@ -916,7 +889,7 @@ func (h *handler) fetchMediaID(ctx context.Context, msg courier.MsgOut, mediaURL
 	}
 
 	// upload media to WhatsApp
-	baseURL := msg.Channel().StringConfigForKey(courier.ConfigBaseURL, "")
+	baseURL := msg.Channel().StringConfigForKey(models.ConfigBaseURL, "")
 	url, err := url.Parse(baseURL)
 	if err != nil {
 		return "", fmt.Errorf("invalid base url set for WA channel: %s: %w", baseURL, err)
@@ -1083,7 +1056,7 @@ func (h *handler) sendWhatsAppMsg(msg courier.MsgOut, sendPath *url.URL, payload
 }
 
 func setWhatsAppAuthHeader(header *http.Header, channel courier.Channel) {
-	authToken := channel.StringConfigForKey(courier.ConfigAuthToken, "")
+	authToken := channel.StringConfigForKey(models.ConfigAuthToken, "")
 
 	if channel.ChannelType() == channelTypeD3 {
 		header.Set(d3AuthorizationKey, authToken)

@@ -1,3 +1,175 @@
+v26.0.0 (2026-01-05)
+-------------------------
+ * Add devcontainer configuration
+
+v10.3.35 (2025-12-08)
+-------------------------
+ * Switch to localstack for tests and CI
+ * Remove ID from incoming messages and events
+
+v10.3.34 (2025-12-02)
+-------------------------
+ * Queue event handling tasks with the event UUID
+
+v10.3.33 (2025-12-02)
+-------------------------
+ * Switch to using msg UUID for fetch attachment requests
+
+v10.3.32 (2025-11-26)
+-------------------------
+ * Fix variable shadowing
+ * Adjust TRN sending handler
+
+v10.3.31 (2025-11-20)
+-------------------------
+ * Add back support to save TRN msg external ID
+
+v10.3.30 (2025-11-19)
+-------------------------
+ * Do not write external ID for TRN
+ * Adjust FCM channel with old integration to not log issue with config
+
+v10.3.29 (2025-11-17)
+-------------------------
+ * Update to latest gocommon that simplifies DynamoDB usage
+
+v10.3.28 (2025-11-14)
+-------------------------
+ * Tweak format of status tags
+
+v10.3.27 (2025-11-13)
+-------------------------
+ * Add support for de-duping history items
+
+v10.3.26 (2025-11-13)
+-------------------------
+ * Write single status tag for status changes
+ * Remove RR channel type
+
+v10.3.25 (2025-11-11)
+-------------------------
+ * Stop writing message status tags.. now we're leaning toward writing these as real events
+
+v10.3.24 (2025-11-10)
+-------------------------
+ * Start writing msg event status tags to DynamoDB
+ * Remove msg id on outgoing messages completely
+ * Remove support for server API keys for FCM channels
+ * Add TRN channel type
+
+v10.3.23 (2025-11-06)
+-------------------------
+ * Remove DS handler
+ * Infobip updated for SMS v3
+
+v10.3.22 (2025-10-27)
+-------------------------
+ * Remove support for status updates using message ID
+ * Fix twiml channel status updates via explicit UUID
+
+v10.3.21 (2025-10-27)
+-------------------------
+ * Update deps
+ * Use msg UUID for status callback for more channel types
+
+v10.3.20 (2025-10-21)
+-------------------------
+ * Allow message status updates with no message id
+ * Fix error messages from channel handlers
+
+v10.3.19 (2025-10-21)
+-------------------------
+ * Re-organize creation of incoming messages
+ * Support status callback with msg UUID for KN and CHP channels
+
+v10.3.18 (2025-10-20)
+-------------------------
+ * Tweak valkey usage during message popping
+ * Fix validation of msg payloads with templates
+
+v10.3.17 (2025-10-20)
+-------------------------
+ * Add validation of msg out payloads
+ * Read contact from contact field on message send payloads
+
+v10.3.16 (2025-10-14)
+-------------------------
+ * Rework message status updates to be by message UUID
+
+v10.3.15 (2025-10-13)
+-------------------------
+ * Revert switch to pgx
+
+v10.3.14 (2025-10-13)
+-------------------------
+ * Switch from lib/pq to jackc/pgx/stdlib
+
+v10.3.13 (2025-10-10)
+-------------------------
+ * Update dependencies including latest phonenumbers
+ * Switch to vinovest/sqlx fork of jmoiron/sqlx
+
+v10.3.12 (2025-10-06)
+-------------------------
+ * Use msg UUID in delete task payloads
+
+v10.3.11 (2025-10-03)
+-------------------------
+ * Update dependencies
+ * Bump to go 1.25
+ * Rework URN DB functions to take context
+
+v10.3.10 (2025-08-29)
+-------------------------
+ * Fix panic in telegram handler
+ * More refactoring of things out of rapidpro package
+
+v10.3.9 (2025-08-14)
+-------------------------
+ * Allow metrics reporting to be off, basic or advanced
+
+v10.3.8 (2025-08-12)
+-------------------------
+ * Update deps
+ * Expose fetch attachment endpoint with new /ci/ prefix for internal endpoints
+
+v10.3.7 (2025-08-05)
+-------------------------
+ * Twewak metric name
+
+v10.3.6 (2025-08-05)
+-------------------------
+ * Update to latest gocommon
+ * Add runtime package and move config and services into it
+
+v10.3.5 (2025-08-04)
+-------------------------
+ * Update to latest gocommon
+
+v10.3.4 (2025-08-04)
+-------------------------
+ * Cleanup startup and shutdown logging
+ * Add same check for improper shutdowns as mailroom
+ * Update to latest gocommon
+
+v10.3.3 (2025-07-31)
+-------------------------
+ * Update to latest vkutil that adds ids to tasks
+
+v10.3.2 (2025-07-30)
+-------------------------
+ * Add new DynamoDB writer and spool for channel logs
+ * Handle deactivated users on Telgram as stopped contacts
+
+v10.3.1 (2025-07-28)
+-------------------------
+ * Update deps including phonenumbers
+ * Queue to new mailroom realtime queue
+
+v10.3.0 (2025-07-08)
+-------------------------
+ * Update to latest vkutil
+
 v10.2.0 (2025-07-01)
 -------------------------
  * Update dependencies
