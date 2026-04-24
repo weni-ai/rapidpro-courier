@@ -717,7 +717,7 @@ func (h *handler) sendFacebookInstagramMsg(ctx context.Context, msg courier.MsgO
 	query.Set("access_token", accessToken)
 	msgURL.RawQuery = query.Encode()
 
-	status := h.Backend().NewStatusUpdate(msg.Channel(), msg.ID(), courier.MsgStatusErrored, clog)
+	status := h.Backend().NewStatusUpdate(msg.Channel(), msg.UUID(), models.MsgStatusErrored, clog)
 
 	isCustomerFeedbackTemplateMsg := strings.Contains(msg.Text(), "{customer_feedback_template}")
 
@@ -826,7 +826,7 @@ func (h *handler) sendFacebookInstagramMsg(ctx context.Context, msg courier.MsgO
 			if err != nil {
 				return nil
 			}
-			status.SetStatus(courier.MsgStatusWired)
+			status.SetStatus(models.MsgStatusWired)
 		}
 		return nil
 	}
