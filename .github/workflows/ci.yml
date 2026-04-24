@@ -21,8 +21,10 @@ jobs:
         ports:
           - 5432:5432
         options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+      # Pinned: localstack/localstack:latest requires LOCALSTACK_AUTH_TOKEN since Mar 2026.
+      # See https://localstack.cloud/2026-updates — use a token or stay on 4.x for tokenless CI.
       localstack:
-        image: localstack/localstack:latest
+        image: localstack/localstack:4.14
         env:
           SERVICES: s3,dynamodb,cloudwatch
         ports:
