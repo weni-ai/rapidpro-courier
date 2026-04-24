@@ -42,6 +42,7 @@ type Contact struct {
 	ID_    ContactID   `db:"id"`
 	UUID_  ContactUUID `db:"uuid"`
 	Name_  null.String `db:"name"`
+	Status_ string      `db:"status"` // single char in DB: A=active, B=blocked, S=stopped, V=archived
 
 	URNID_ ContactURNID `db:"urn_id"`
 
