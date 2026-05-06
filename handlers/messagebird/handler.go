@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strconv"
 
 	"net/http"
 	"time"
@@ -20,9 +19,11 @@ import (
 	"github.com/buger/jsonparser"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/nyaruka/courier"
+	"github.com/nyaruka/courier/core/models"
 	"github.com/nyaruka/courier/handlers"
 	"github.com/nyaruka/gocommon/jsonx"
 	"github.com/nyaruka/gocommon/urns"
+	"github.com/nyaruka/gocommon/uuids"
 )
 
 var (
@@ -53,13 +54,13 @@ type ReceivedStatus struct {
 	StatusErrorCode int       `schema:"statusErrorCode"`
 }
 
-var statusMapping = map[string]courier.MsgStatus{
-	"scheduled":       courier.MsgStatusSent,
-	"delivery_failed": courier.MsgStatusFailed,
-	"sent":            courier.MsgStatusSent,
-	"buffered":        courier.MsgStatusSent,
-	"delivered":       courier.MsgStatusDelivered,
-	"expired":         courier.MsgStatusFailed,
+var statusMapping = map[string]models.MsgStatus{
+	"scheduled":       models.MsgStatusSent,
+	"delivery_failed": models.MsgStatusFailed,
+	"sent":            models.MsgStatusSent,
+	"buffered":        models.MsgStatusSent,
+	"delivered":       models.MsgStatusDelivered,
+	"expired":         models.MsgStatusFailed,
 }
 
 type formMessage struct {
@@ -84,8 +85,8 @@ type handler struct {
 	validateSignatures bool
 }
 
-func newHandler(channelType courier.ChannelType, name string, validateSignatures bool) courier.ChannelHandler {
-	return &handler{handlers.NewBaseHandler(courier.ChannelType("MBD"), "Messagebird"), validateSignatures}
+func newHandler(channelType models.ChannelType, name string, validateSignatures bool) courier.ChannelHandler {
+	return &handler{handlers.NewBaseHandler(models.ChannelType("MBD"), "Messagebird"), validateSignatures}
 }
 
 // Initialize is called by the engine once everything is loaded
@@ -114,11 +115,10 @@ func (h *handler) receiveStatus(ctx context.Context, channel courier.Channel, w 
 	// if the message id was passed explicitely, use that
 	var status courier.StatusUpdate
 	if receivedStatus.Reference != "" {
-		msgID, err := strconv.ParseInt(receivedStatus.Reference, 10, 64)
-		if err != nil {
-			slog.Error("error converting Messagebird status id to integer", "error", err, "id", receivedStatus.Reference)
+		if !uuids.Is(receivedStatus.Reference) {
+			slog.Error("error converting Messagebird status reference to UUID", "error", err, "uuid", receivedStatus.Reference)
 		} else {
-			status = h.Backend().NewStatusUpdate(channel, courier.MsgID(msgID), msgStatus, clog)
+			status = h.Backend().NewStatusUpdate(channel, models.MsgUUID(receivedStatus.Reference), msgStatus, clog)
 		}
 	}
 
@@ -133,7 +133,7 @@ func (h *handler) receiveStatus(ctx context.Context, channel courier.Channel, w 
 			return nil, handlers.WriteAndLogRequestError(ctx, h, channel, w, r, err)
 		}
 		// create a stop channel event
-		channelEvent := h.Backend().NewChannelEvent(channel, courier.EventTypeStopContact, urn, clog)
+		channelEvent := h.Backend().NewChannelEvent(channel, models.EventTypeStopContact, urn, clog)
 		err = h.Backend().WriteChannelEvent(ctx, channelEvent, clog)
 		if err != nil {
 			return nil, err
@@ -203,7 +203,7 @@ func (h *handler) receiveMessage(ctx context.Context, channel courier.Channel, w
 }
 
 func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.SendResult, clog *courier.ChannelLog) error {
-	authToken := msg.Channel().StringConfigForKey(courier.ConfigAuthToken, "")
+	authToken := msg.Channel().StringConfigForKey(models.ConfigAuthToken, "")
 	if authToken == "" {
 		return courier.ErrChannelConfig
 	}
@@ -213,7 +213,7 @@ func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.Sen
 	payload := &Message{
 		Recipients: []string{user},
 		Originator: msg.Channel().Address(),
-		Reference:  msg.ID().String(),
+		Reference:  string(msg.UUID()),
 	}
 	// build message payload
 
@@ -298,7 +298,7 @@ func (h *handler) validateSignature(c courier.Channel, r *http.Request) error {
 	if headerSignature == "" {
 		return fmt.Errorf("missing request signature")
 	}
-	configsecret := c.StringConfigForKey(courier.ConfigSecret, "")
+	configsecret := c.StringConfigForKey(models.ConfigSecret, "")
 	if configsecret == "" {
 		return fmt.Errorf("missing configsecret")
 	}

@@ -11,11 +11,11 @@ import (
 	"reflect"
 	"unicode/utf8"
 
-	validator "gopkg.in/go-playground/validator.v9"
+	"github.com/go-playground/validator/v10"
 )
 
 var (
-	validate = validator.New()
+	validate = validator.New(validator.WithRequiredStructEnabled())
 )
 
 func Validate(obj any) error {

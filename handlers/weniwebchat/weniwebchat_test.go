@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/nyaruka/courier"
+	"github.com/nyaruka/courier/core/models"
 	. "github.com/nyaruka/courier/handlers"
 	"github.com/nyaruka/courier/test"
 	"github.com/nyaruka/gocommon/httpx"
@@ -140,14 +141,10 @@ func TestIncoming(t *testing.T) {
 	RunIncomingTestCases(t, testChannels, newHandler(), testCases)
 }
 
-func BenchmarkHandler(b *testing.B) {
-	RunChannelBenchmarks(b, testChannels, newHandler(), testCases)
-}
-
 // SendMsg test
 
 func setSendURL(s *httptest.Server, h courier.ChannelHandler, c courier.Channel, m courier.MsgOut) {
-	c.(*test.MockChannel).SetConfig(courier.ConfigBaseURL, s.URL)
+	c.(*test.MockChannel).SetConfig(models.ConfigBaseURL, s.URL)
 	timestamp = "1616700878"
 }
 
@@ -233,7 +230,7 @@ var sendTestCases = []OutgoingTestCase{
 
 func TestOutgoing(t *testing.T) {
 	var defaultChannel = []courier.Channel{
-		test.NewMockChannel(channelUUID, "WWC", "250788383383", "", []string{urns.External.Prefix}, map[string]any{courier.ConfigBaseURL: "https://foo.bar"}),
+		test.NewMockChannel(channelUUID, "WWC", "250788383383", "", []string{urns.External.Prefix}, map[string]any{models.ConfigBaseURL: "https://foo.bar"}),
 	}
 
 	timestamp = "1616700878"

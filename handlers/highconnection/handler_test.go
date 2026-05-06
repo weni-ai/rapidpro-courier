@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/nyaruka/courier"
+	"github.com/nyaruka/courier/core/models"
 	. "github.com/nyaruka/courier/handlers"
 	"github.com/nyaruka/courier/test"
 	"github.com/nyaruka/gocommon/httpx"
@@ -73,10 +74,10 @@ var testCases = []IncomingTestCase{
 	},
 	{
 		Label:                "Status Delivered",
-		URL:                  statusURL + "?ret_id=12345&status=6",
+		URL:                  statusURL + "?ret_id=019a0719-ac96-7eb9-a837-cac215164834&status=6",
 		ExpectedRespStatus:   200,
 		ExpectedBodyContains: `"status":"D"`,
-		ExpectedStatuses:     []ExpectedStatus{{MsgID: 12345, Status: courier.MsgStatusDelivered}},
+		ExpectedStatuses:     []ExpectedStatus{{MsgUUID: "019a0719-ac96-7eb9-a837-cac215164834", Status: models.MsgStatusDelivered}},
 	},
 }
 
@@ -84,16 +85,12 @@ func TestIncoming(t *testing.T) {
 	RunIncomingTestCases(t, testChannels, newHandler(), testCases)
 }
 
-func BenchmarkHandler(b *testing.B) {
-	RunChannelBenchmarks(b, testChannels, newHandler(), testCases)
-}
-
 var defaultSendTestCases = []OutgoingTestCase{
 	{
 		Label:   "Plain Send",
 		MsgText: "Simple Message",
 		MsgURN:  "tel:+250788383383",
-		MsgFlow: &courier.FlowReference{UUID: "9de3663f-c5c5-4c92-9f45-ecbc09abcc85", Name: "Favorites"},
+		MsgFlow: &models.FlowReference{UUID: "9de3663f-c5c5-4c92-9f45-ecbc09abcc85", Name: "Favorites"},
 		MockResponses: map[string][]*httpx.MockResponse{
 			"https://highpushfastapi-v2.hcnx.eu/api*": {
 				httpx.NewMockResponse(200, nil, []byte(``)),
@@ -105,7 +102,7 @@ var defaultSendTestCases = []OutgoingTestCase{
 				"password":   {"Password"},
 				"text":       {"Simple Message"},
 				"to":         {"+250788383383"},
-				"ret_id":     {"10"},
+				"ret_id":     {"0191e180-7d60-7000-aded-7d8b151cbd5b"},
 				"datacoding": {"8"},
 				"user_data":  {"Favorites"},
 				"ret_url":    {"https://localhost/c/hx/8eb23e93-5ecb-45ba-b726-3b064e0c56ab/status"},
@@ -128,7 +125,7 @@ var defaultSendTestCases = []OutgoingTestCase{
 				"password":   {"Password"},
 				"text":       {"Simple Message"},
 				"to":         {"+250788383383"},
-				"ret_id":     {"10"},
+				"ret_id":     {"0191e180-7d60-7000-aded-7d8b151cbd5b"},
 				"datacoding": {"8"},
 				"user_data":  {""},
 				"ret_url":    {"https://localhost/c/hx/8eb23e93-5ecb-45ba-b726-3b064e0c56ab/status"},
@@ -140,7 +137,7 @@ var defaultSendTestCases = []OutgoingTestCase{
 		Label:   "Unicode Send",
 		MsgText: "☺",
 		MsgURN:  "tel:+250788383383",
-		MsgFlow: &courier.FlowReference{UUID: "9de3663f-c5c5-4c92-9f45-ecbc09abcc85", Name: "Favorites"},
+		MsgFlow: &models.FlowReference{UUID: "9de3663f-c5c5-4c92-9f45-ecbc09abcc85", Name: "Favorites"},
 		MockResponses: map[string][]*httpx.MockResponse{
 			"https://highpushfastapi-v2.hcnx.eu/api*": {
 				httpx.NewMockResponse(200, nil, []byte(``)),
@@ -152,7 +149,7 @@ var defaultSendTestCases = []OutgoingTestCase{
 				"password":   {"Password"},
 				"text":       {"☺"},
 				"to":         {"+250788383383"},
-				"ret_id":     {"10"},
+				"ret_id":     {"0191e180-7d60-7000-aded-7d8b151cbd5b"},
 				"datacoding": {"8"},
 				"user_data":  {"Favorites"},
 				"ret_url":    {"https://localhost/c/hx/8eb23e93-5ecb-45ba-b726-3b064e0c56ab/status"},
@@ -164,7 +161,7 @@ var defaultSendTestCases = []OutgoingTestCase{
 		Label:   "Long Send",
 		MsgText: "This is a longer message than 160 characters and will cause us to split it into two separate parts, isn't that right but it is even longer than before I say, I need to keep adding more things to make it work",
 		MsgURN:  "tel:+250788383383",
-		MsgFlow: &courier.FlowReference{UUID: "9de3663f-c5c5-4c92-9f45-ecbc09abcc85", Name: "Favorites"},
+		MsgFlow: &models.FlowReference{UUID: "9de3663f-c5c5-4c92-9f45-ecbc09abcc85", Name: "Favorites"},
 		MockResponses: map[string][]*httpx.MockResponse{
 			"https://highpushfastapi-v2.hcnx.eu/api*": {
 				httpx.NewMockResponse(200, nil, []byte(``)),
@@ -178,7 +175,7 @@ var defaultSendTestCases = []OutgoingTestCase{
 					"password":   {"Password"},
 					"text":       {"This is a longer message than 160 characters and will cause us to split it into two separate parts, isn't that right but it is even longer than before I say,"},
 					"to":         {"+250788383383"},
-					"ret_id":     {"10"},
+					"ret_id":     {"0191e180-7d60-7000-aded-7d8b151cbd5b"},
 					"datacoding": {"8"},
 					"user_data":  {"Favorites"},
 					"ret_url":    {"https://localhost/c/hx/8eb23e93-5ecb-45ba-b726-3b064e0c56ab/status"},
@@ -191,7 +188,7 @@ var defaultSendTestCases = []OutgoingTestCase{
 					"password":   {"Password"},
 					"text":       {"I need to keep adding more things to make it work"},
 					"to":         {"+250788383383"},
-					"ret_id":     {"10"},
+					"ret_id":     {"0191e180-7d60-7000-aded-7d8b151cbd5b"},
 					"datacoding": {"8"},
 					"user_data":  {"Favorites"},
 					"ret_url":    {"https://localhost/c/hx/8eb23e93-5ecb-45ba-b726-3b064e0c56ab/status"},
@@ -205,7 +202,7 @@ var defaultSendTestCases = []OutgoingTestCase{
 		MsgText:        "My pic!",
 		MsgAttachments: []string{"image/jpeg:https://foo.bar/image.jpg"},
 		MsgURN:         "tel:+250788383383",
-		MsgFlow:        &courier.FlowReference{UUID: "9de3663f-c5c5-4c92-9f45-ecbc09abcc85", Name: "Favorites"},
+		MsgFlow:        &models.FlowReference{UUID: "9de3663f-c5c5-4c92-9f45-ecbc09abcc85", Name: "Favorites"},
 		MockResponses: map[string][]*httpx.MockResponse{
 			"https://highpushfastapi-v2.hcnx.eu/api*": {
 				httpx.NewMockResponse(200, nil, []byte(``)),
@@ -217,7 +214,7 @@ var defaultSendTestCases = []OutgoingTestCase{
 				"password":   {"Password"},
 				"text":       {"My pic!\nhttps://foo.bar/image.jpg"},
 				"to":         {"+250788383383"},
-				"ret_id":     {"10"},
+				"ret_id":     {"0191e180-7d60-7000-aded-7d8b151cbd5b"},
 				"datacoding": {"8"},
 				"user_data":  {"Favorites"},
 				"ret_url":    {"https://localhost/c/hx/8eb23e93-5ecb-45ba-b726-3b064e0c56ab/status"},
@@ -243,8 +240,8 @@ func TestOutgoing(t *testing.T) {
 	var defaultChannel = test.NewMockChannel("8eb23e93-5ecb-45ba-b726-3b064e0c56ab", "HX", "2020", "US",
 		[]string{urns.Phone.Prefix},
 		map[string]any{
-			courier.ConfigPassword: "Password",
-			courier.ConfigUsername: "Username",
+			models.ConfigPassword: "Password",
+			models.ConfigUsername: "Username",
 		})
 
 	RunOutgoingTestCases(t, defaultChannel, newHandler(), defaultSendTestCases, []string{"Password"}, nil)

@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/nyaruka/courier"
+	"github.com/nyaruka/courier/core/models"
+	"github.com/nyaruka/courier/runtime"
 	"github.com/nyaruka/courier/test"
 	"github.com/nyaruka/courier/utils/clogs"
 	"github.com/nyaruka/gocommon/dates"
@@ -20,24 +22,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func testConfig() *courier.Config {
-	config := courier.NewDefaultConfig()
-	config.DB = "postgres://courier_test:temba@localhost:5432/courier_test?sslmode=disable"
-	config.Valkey = "valkey://localhost:6379/0"
-	config.Port = 8081
-	return config
+func testConfig() *runtime.Config {
+	cfg := runtime.NewDefaultConfig()
+	cfg.DB = "postgres://courier_test:temba@postgres:5432/courier_test?sslmode=disable"
+	cfg.Valkey = "valkey://valkey:6379/0"
+	cfg.Port = 8081
+	return cfg
 }
 
 func TestServerURLs(t *testing.T) {
 	logger := slog.Default()
-	config := testConfig()
-	config.StatusUsername = "admin"
-	config.StatusPassword = "password123"
+	cfg := testConfig()
+	cfg.StatusUsername = "admin"
+	cfg.StatusPassword = "password123"
 
 	mb := test.NewMockBackend()
 	mb.AddChannel(test.NewMockChannel("95710b36-855d-4832-a723-5f71f73688a0", "MCK", "12345", "RW", []string{urns.Phone.Prefix}, nil))
 
-	server := courier.NewServerWithLogger(config, mb, logger)
+	server := courier.NewServerWithLogger(cfg, mb, logger)
 	server.Start()
 	defer server.Stop()
 
@@ -139,25 +141,25 @@ func TestOutgoing(t *testing.T) {
 	mb.AddChannel(mockChannel)
 
 	// try to send message via unregistered channel
-	msg := test.NewMockMsg(courier.MsgID(101), courier.NilMsgUUID, brokenChannel, "tel:+250788383383", "test message", nil)
+	msg := test.NewMockMsg("0199df01-b383-7610-80f9-fd952f8d489c", brokenChannel, "tel:+250788383383", "test message", nil)
 	sendAndWait(mb, msg)
 
 	// message should have failed...
 	assert.Equal(t, 1, len(mb.WrittenMsgStatuses()))
-	assert.Equal(t, msg.ID(), mb.WrittenMsgStatuses()[0].MsgID())
-	assert.Equal(t, courier.MsgStatusFailed, mb.WrittenMsgStatuses()[0].Status())
+	assert.Equal(t, msg.UUID(), mb.WrittenMsgStatuses()[0].MsgUUID())
+	assert.Equal(t, models.MsgStatusFailed, mb.WrittenMsgStatuses()[0].Status())
 	assert.Equal(t, 1, len(mb.WrittenChannelLogs()))
 	mb.Reset()
 
 	// send message via registered channel
-	msg = test.NewMockMsg(courier.MsgID(102), courier.NilMsgUUID, mockChannel, "tel:+250788383383", "test message 2", nil)
+	msg = test.NewMockMsg("0199df01-dacc-754b-a830-ab2bf0f511d3", mockChannel, "tel:+250788383383", "test message 2", nil)
 	sendAndWait(mb, msg)
 
 	// message should be marked as wired
 	assert.Len(t, mb.WrittenMsgStatuses(), 1)
 	status := mb.WrittenMsgStatuses()[0]
-	assert.Equal(t, msg.ID(), status.MsgID())
-	assert.Equal(t, courier.MsgStatusWired, status.Status())
+	assert.Equal(t, msg.UUID(), status.MsgUUID())
+	assert.Equal(t, models.MsgStatusWired, status.Status())
 
 	// and we should have a channel log with redacted errors and traces
 	assert.Len(t, mb.WrittenChannelLogs(), 1)
@@ -179,44 +181,46 @@ func TestOutgoing(t *testing.T) {
 
 	// message should be marked as wired
 	assert.Equal(t, 1, len(mb.WrittenMsgStatuses()))
-	assert.Equal(t, msg.ID(), mb.WrittenMsgStatuses()[0].MsgID())
-	assert.Equal(t, courier.MsgStatusWired, mb.WrittenMsgStatuses()[0].Status())
+	assert.Equal(t, msg.UUID(), mb.WrittenMsgStatuses()[0].MsgUUID())
+	assert.Equal(t, models.MsgStatusWired, mb.WrittenMsgStatuses()[0].Status())
 	mb.Reset()
 
 	// send message which will have mocked connection error
-	sendAndWait(mb, test.NewMockMsg(courier.MsgID(103), courier.NilMsgUUID, mockChannel, "tel:+250788383383", "3", nil))
+	sendAndWait(mb, test.NewMockMsg("0199df02-1ec4-73ba-8e69-fa77d344fb25", mockChannel, "tel:+250788383383", "3", nil))
 
 	// message should be marked as errored (retryable)
 	assert.Equal(t, 1, len(mb.WrittenMsgStatuses()))
-	assert.Equal(t, courier.MsgStatusErrored, mb.WrittenMsgStatuses()[0].Status())
+	assert.Equal(t, models.MsgStatusErrored, mb.WrittenMsgStatuses()[0].Status())
 	mb.Reset()
 
 	// send message which will have mocked channel config error
-	sendAndWait(mb, test.NewMockMsg(courier.MsgID(104), courier.NilMsgUUID, mockChannel, "tel:+250788383383", "err:config", nil))
+	sendAndWait(mb, test.NewMockMsg("0199df02-3d56-7c69-a25e-2dc8ecff4da5", mockChannel, "tel:+250788383383", "err:config", nil))
 
 	// message should be marked as failed (non-retryable)
 	assert.Equal(t, 1, len(mb.WrittenMsgStatuses()))
-	assert.Equal(t, courier.MsgStatusFailed, mb.WrittenMsgStatuses()[0].Status())
+	assert.Equal(t, models.MsgStatusFailed, mb.WrittenMsgStatuses()[0].Status())
 	mb.Reset()
 
 	// send message which will have mocked rate limiting error
-	sendAndWait(mb, test.NewMockMsg(courier.MsgID(105), courier.NilMsgUUID, mockChannel, "tel:+250788383383", "5", nil))
+	sendAndWait(mb, test.NewMockMsg("0199df02-5f1b-782b-b457-61ee96333d48", mockChannel, "tel:+250788383383", "5", nil))
 
 	// message should be marked as errored (retryable)
 	assert.Equal(t, 1, len(mb.WrittenMsgStatuses()))
-	assert.Equal(t, courier.MsgStatusErrored, mb.WrittenMsgStatuses()[0].Status())
+	assert.Equal(t, models.MsgStatusErrored, mb.WrittenMsgStatuses()[0].Status())
 	mb.Reset()
 
 	// send message which will have mocked contact-stopped error
-	sendAndWait(mb, test.NewMockMsg(courier.MsgID(106), courier.NilMsgUUID, mockChannel, "tel:+250788383383", "6", nil))
+	sendAndWait(mb, test.NewMockMsg("0199df05-037b-718f-a6ad-ab66c10243b2", mockChannel, "tel:+250788383383", "6", nil))
 
 	// message should be marked as failed (non-retryable)
-	assert.Equal(t, 1, len(mb.WrittenMsgStatuses()))
-	assert.Equal(t, courier.MsgStatusFailed, mb.WrittenMsgStatuses()[0].Status())
+	if assert.Equal(t, 1, len(mb.WrittenMsgStatuses())) {
+		assert.Equal(t, models.MsgStatusFailed, mb.WrittenMsgStatuses()[0].Status())
+	}
 
 	// and we should have created a contact stop event
-	assert.Equal(t, 1, len(mb.WrittenChannelEvents()))
-	assert.Equal(t, courier.EventTypeStopContact, mb.WrittenChannelEvents()[0].EventType())
+	if assert.Equal(t, 1, len(mb.WrittenChannelEvents())) {
+		assert.Equal(t, models.EventTypeStopContact, mb.WrittenChannelEvents()[0].EventType())
+	}
 	mb.Reset()
 }
 
@@ -243,15 +247,15 @@ func TestFetchAttachment(t *testing.T) {
 	uuids.SetGenerator(uuids.NewSeededGenerator(1234, dates.NewSequentialNow(time.Date(2024, 9, 11, 14, 33, 0, 0, time.UTC), time.Second)))
 
 	logger := slog.Default()
-	config := courier.NewDefaultConfig()
-	config.AuthToken = "sesame"
-	config.Port = 8081
+	cfg := runtime.NewDefaultConfig()
+	cfg.AuthToken = "sesame"
+	cfg.Port = 8081
 
 	mb := test.NewMockBackend()
 	mockChannel := test.NewMockChannel("e4bb1578-29da-4fa5-a214-9da19dd24230", "MCK", "2020", "US", []string{urns.Phone.Prefix}, map[string]any{})
 	mb.AddChannel(mockChannel)
 
-	server := courier.NewServerWithLogger(config, mb, logger)
+	server := courier.NewServerWithLogger(cfg, mb, logger)
 	server.Start()
 	defer server.Stop()
 
@@ -259,7 +263,7 @@ func TestFetchAttachment(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	submit := func(body, authToken string) (int, []byte) {
-		req, _ := http.NewRequest("POST", "http://localhost:8081/c/_fetch-attachment", strings.NewReader(body))
+		req, _ := http.NewRequest("POST", "http://localhost:8081/ci/attachment/fetch", strings.NewReader(body))
 		if authToken != "" {
 			req.Header.Set("Authorization", "Bearer "+authToken)
 		}
@@ -319,7 +323,7 @@ func sendAndWait(mb *test.MockBackend, m courier.MsgOut) {
 	for {
 		time.Sleep(time.Millisecond * 25)
 
-		if sent, _ := mb.WasMsgSent(ctx, m.ID()); sent {
+		if sent, _ := mb.WasMsgSent(ctx, m.UUID()); sent {
 			return
 		}
 	}

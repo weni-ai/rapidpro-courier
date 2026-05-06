@@ -15,14 +15,17 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/lib/pq" // postgres driver
 	"github.com/nyaruka/courier"
+	"github.com/nyaruka/courier/core/models"
+	"github.com/nyaruka/courier/runtime"
 	"github.com/nyaruka/courier/test"
 	"github.com/nyaruka/courier/utils/clogs"
+	"github.com/nyaruka/gocommon/dates"
 	"github.com/nyaruka/gocommon/httpx"
 	"github.com/nyaruka/gocommon/i18n"
 	"github.com/nyaruka/gocommon/jsonx"
 	"github.com/nyaruka/gocommon/urns"
+	"github.com/nyaruka/gocommon/uuids"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -32,14 +35,14 @@ type RequestPrepFunc func(*http.Request)
 
 // ExpectedStatus is an expected status update
 type ExpectedStatus struct {
-	MsgID      courier.MsgID
+	MsgUUID    models.MsgUUID
 	ExternalID string
-	Status     courier.MsgStatus
+	Status     models.MsgStatus
 }
 
 // ExpectedEvent is an expected channel event
 type ExpectedEvent struct {
-	Type  courier.ChannelEventType
+	Type  models.ChannelEventType
 	URN   urns.URN
 	Time  time.Time
 	Extra map[string]string
@@ -139,14 +142,13 @@ func newServer(backend courier.Backend) courier.Server {
 	logger := slog.Default()
 	log.SetOutput(io.Discard)
 
-	config := courier.NewDefaultConfig()
-	config.FacebookWebhookSecret = "fb_webhook_secret"
-	config.FacebookApplicationSecret = "fb_app_secret"
-	config.WhatsappCloudWebhookSecret = "wac_webhook_secret"
-	config.WhatsappCloudApplicationSecret = "fb_app_secret"
-	config.WhatsappAdminSystemUserToken = "wac_admin_system_user_token"
+	cfg := runtime.NewDefaultConfig()
+	cfg.FacebookWebhookSecret = "fb_webhook_secret"
+	cfg.FacebookApplicationSecret = "fb_app_secret"
+	cfg.WhatsappCloudApplicationSecret = "fb_app_secret"
+	cfg.WhatsappAdminSystemUserToken = "wac_admin_system_user_token"
 
-	return courier.NewServerWithLogger(config, backend, logger)
+	return courier.NewServerWithLogger(cfg, backend, logger)
 
 }
 
@@ -159,6 +161,14 @@ func RunIncomingTestCases(t *testing.T, channels []courier.Channel, handler cour
 		mb.AddChannel(ch)
 	}
 	handler.Initialize(s)
+
+	mockNow := dates.NewSequentialNow(time.Date(2025, 10, 13, 11, 20, 0, 0, time.UTC), time.Second)
+
+	uuids.SetGenerator(uuids.NewSeededGenerator(1234, mockNow))
+	defer uuids.SetGenerator(uuids.DefaultGenerator)
+
+	dates.SetNowFunc(mockNow)
+	defer dates.SetNowFunc(time.Now)
 
 	for _, tc := range testCases {
 		t.Run(tc.Label, func(t *testing.T) {
@@ -197,7 +207,7 @@ func RunIncomingTestCases(t *testing.T, channels []courier.Channel, handler cour
 				}
 				actualStatus := actualStatuses[i]
 
-				assert.Equal(t, expectedStatus.MsgID, actualStatus.MsgID(), "msg id mismatch for update %d", i)
+				assert.Equal(t, expectedStatus.MsgUUID, actualStatus.MsgUUID(), "msg uuid mismatch for update %d", i)
 				assert.Equal(t, expectedStatus.ExternalID, actualStatus.ExternalID(), "external id mismatch for update %d", i)
 				assert.Equal(t, expectedStatus.Status, actualStatus.Status(), "status value mismatch for update %d", i)
 			}
@@ -301,15 +311,15 @@ type OutgoingTestCase struct {
 	MsgURN                  string
 	MsgURNAuth              string
 	MsgAttachments          []string
-	MsgQuickReplies         []courier.QuickReply
+	MsgQuickReplies         []models.QuickReply
 	MsgLocale               i18n.Locale
 	MsgTemplating           string
 	MsgHighPriority         bool
 	MsgResponseToExternalID string
-	MsgFlow                 *courier.FlowReference
-	MsgOptIn                *courier.OptInReference
-	MsgUserID               courier.UserID
-	MsgOrigin               courier.MsgOrigin
+	MsgFlow                 *models.FlowReference
+	MsgOptIn                *models.OptInReference
+	MsgUserID               models.UserID
+	MsgOrigin               models.MsgOrigin
 	MsgContactLastSeenOn    *time.Time
 
 	MockResponses map[string][]*httpx.MockResponse
@@ -324,12 +334,13 @@ type OutgoingTestCase struct {
 
 // Msg creates the test message for this test case
 func (tc *OutgoingTestCase) Msg(mb *test.MockBackend, ch courier.Channel) courier.MsgOut {
-	msgOrigin := courier.MsgOriginFlow
+	msgOrigin := models.MsgOriginFlow
 	if tc.MsgOrigin != "" {
 		msgOrigin = tc.MsgOrigin
 	}
 
-	m := mb.NewOutgoingMsg(ch, 10, urns.URN(tc.MsgURN), tc.MsgText, tc.MsgHighPriority, tc.MsgQuickReplies, tc.MsgResponseToExternalID, msgOrigin, tc.MsgContactLastSeenOn).(*test.MockMsg)
+	c := &models.ContactReference{ID: 100, UUID: "a984069d-0008-4d8c-a772-b14a8a6acccc", LastSeenOn: tc.MsgContactLastSeenOn}
+	m := mb.NewOutgoingMsg(ch, "0191e180-7d60-7000-aded-7d8b151cbd5b", c, urns.URN(tc.MsgURN), tc.MsgText, tc.MsgHighPriority, tc.MsgQuickReplies, tc.MsgResponseToExternalID, msgOrigin).(*test.MockMsg)
 	m.WithLocale(tc.MsgLocale)
 	m.WithUserID(tc.MsgUserID)
 
@@ -340,7 +351,7 @@ func (tc *OutgoingTestCase) Msg(mb *test.MockBackend, ch courier.Channel) courie
 		m.WithURNAuth(tc.MsgURNAuth)
 	}
 	if tc.MsgTemplating != "" {
-		templating := &courier.Templating{}
+		templating := &models.Templating{}
 		jsonx.MustUnmarshal([]byte(tc.MsgTemplating), templating)
 		m.WithTemplating(templating)
 	}
@@ -413,10 +424,10 @@ func RunOutgoingTestCases(t *testing.T, channel courier.Channel, handler courier
 			assert.Equal(t, append([]*clogs.Error{}, tc.ExpectedLogErrors...), clog.Errors, "channel log errors mismatch")
 
 			if tc.ExpectedContactURNs != nil {
-				var contactUUID courier.ContactUUID
+				var contactUUID models.ContactUUID
 				for urn, shouldBePresent := range tc.ExpectedContactURNs {
 					contact, _ := mb.GetContact(ctx, channel, urns.URN(urn), nil, "", true, clog)
-					if contactUUID == courier.NilContactUUID && shouldBePresent {
+					if contactUUID == models.NilContactUUID && shouldBePresent {
 						contactUUID = contact.UUID()
 					}
 					if shouldBePresent {
@@ -433,27 +444,6 @@ func RunOutgoingTestCases(t *testing.T, channel courier.Channel, handler courier
 			}
 
 			AssertChannelLogRedaction(t, clog, checkRedacted)
-		})
-	}
-}
-
-// RunChannelBenchmarks runs all the passed in test cases for the passed in channels
-func RunChannelBenchmarks(b *testing.B, channels []courier.Channel, handler courier.ChannelHandler, testCases []IncomingTestCase) {
-	mb := test.NewMockBackend()
-	s := newServer(mb)
-
-	for _, ch := range channels {
-		mb.AddChannel(ch)
-	}
-	handler.Initialize(s)
-
-	for _, testCase := range testCases {
-		mb.Reset()
-
-		b.Run(testCase.Label, func(b *testing.B) {
-			for i := 0; i < b.N; i++ {
-				testHandlerRequest(b, s, testCase.URL, testCase.Headers, testCase.Data, testCase.MultipartForm, testCase.ExpectedRespStatus, "", testCase.PrepRequest)
-			}
 		})
 	}
 }

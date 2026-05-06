@@ -1,4 +1,4 @@
-package courier
+package runtime
 
 import (
 	"encoding/csv"
@@ -17,19 +17,20 @@ import (
 
 // Config is our top level configuration object
 type Config struct {
-	Backend   string `help:"the backend that will be used by courier (currently only rapidpro is supported)"`
-	SentryDSN string `help:"the DSN used for logging errors to Sentry"`
-	Domain    string `help:"the domain courier is exposed on"`
-	Address   string `help:"the network interface address courier will bind to"`
-	Port      int    `help:"the port courier will listen on"`
 	DB        string `validate:"url,startswith=postgres:"   help:"URL for your Postgres database"`
 	Valkey    string `validate:"url,startswith=valkey:"     help:"URL for your Valkey instance"`
 	SpoolDir  string `help:"the local directory where courier will write statuses or msgs that need to be retried (needs to be writable)"`
+	SentryDSN string `help:"the DSN used for logging errors to Sentry"`
+
+	Domain  string `help:"the domain courier is exposed on"`
+	Address string `help:"the network interface address courier will bind to"`
+	Port    int    `help:"the port courier will listen on"`
 
 	AWSAccessKeyID     string `help:"access key ID to use for AWS services"`
 	AWSSecretAccessKey string `help:"secret access key to use for AWS services"`
 	AWSRegion          string `help:"region to use for AWS services, e.g. us-east-1"`
 
+	MetricsReporting    string `validate:"eq=off|eq=basic|eq=advanced"     help:"the level of metrics reporting"`
 	CloudwatchNamespace string `help:"the namespace to use for cloudwatch metrics"`
 	DeploymentID        string `help:"the deployment identifier to use for metrics"`
 	InstanceID          string `help:"the instance identifier to use for metrics"`
@@ -40,7 +41,7 @@ type Config struct {
 
 	S3Endpoint          string `help:"S3 service endpoint, e.g. https://s3.amazonaws.com"`
 	S3AttachmentsBucket string `help:"S3 bucket to write attachments to"`
-	S3Minio             bool   `help:"S3 is actually Minio or other compatible service"`
+	S3PathStyle         bool   `help:"S3 should use path style URLs"`
 
 	WhatsappCloudApplicationSecret string `help:"the Whatsapp Cloud app secret"`
 	WhatsappCloudWebhookSecret     string `help:"the secret for WhatsApp Cloud webhook URL verification"`
@@ -51,8 +52,6 @@ type Config struct {
 	DisallowedNetworks string     `help:"comma separated list of IP addresses and networks which we disallow fetching attachments from"`
 	MediaDomain        string     `help:"the domain on which we'll try to resolve outgoing media URLs"`
 	MaxWorkers         int        `help:"the maximum number of go routines that will be used for sending (set to 0 to disable sending)"`
-	LibratoUsername    string     `help:"the username that will be used to authenticate to Librato"`
-	LibratoToken       string     `help:"the token that will be used to authenticate to Librato"`
 	StatusUsername     string     `help:"the username that is needed to authenticate against the /status endpoint"`
 	StatusPassword     string     `help:"the password that is needed to authenticate against the /status endpoint"`
 	AuthToken          string     `help:"the authentication token need to access non-channel endpoints"`
@@ -70,18 +69,19 @@ type Config struct {
 func NewDefaultConfig() *Config {
 	hostname, _ := os.Hostname()
 	return &Config{
-		Backend:  "rapidpro",
-		Domain:   "localhost",
-		Address:  "",
-		Port:     8080,
-		DB:       "postgres://temba:temba@localhost/temba?sslmode=disable",
-		Valkey:   "valkey://localhost:6379/15",
+		DB:       "postgres://temba:temba@postgres/temba?sslmode=disable",
+		Valkey:   "valkey://valkey:6379/15",
 		SpoolDir: "/var/spool/courier",
+
+		Domain:  "localhost",
+		Address: "",
+		Port:    8080,
 
 		AWSAccessKeyID:     "",
 		AWSSecretAccessKey: "",
 		AWSRegion:          "us-east-1",
 
+		MetricsReporting:    "off",
 		CloudwatchNamespace: "Temba/Courier",
 		DeploymentID:        "dev",
 		InstanceID:          hostname,
@@ -92,7 +92,7 @@ func NewDefaultConfig() *Config {
 
 		S3Endpoint:          "https://s3.amazonaws.com",
 		S3AttachmentsBucket: "temba-attachments",
-		S3Minio:             false,
+		S3PathStyle:         false,
 
 		FacebookApplicationSecret:      "missing_facebook_app_secret",
 		FacebookWebhookSecret:          "missing_facebook_webhook_secret",
@@ -107,16 +107,16 @@ func NewDefaultConfig() *Config {
 }
 
 func LoadConfig() *Config {
-	config := NewDefaultConfig()
-	loader := ezconf.NewLoader(config, "courier", "Courier - A fast message broker for SMS and IP messages", []string{"config.toml"})
+	cfg := NewDefaultConfig()
+	loader := ezconf.NewLoader(cfg, "courier", "Courier - A fast message broker for SMS and IP messages", []string{"config.toml"})
 	loader.MustLoad()
 
 	// ensure config is valid
-	if err := config.Validate(); err != nil {
+	if err := cfg.Validate(); err != nil {
 		log.Fatalf("invalid config: %s", err)
 	}
 
-	return config
+	return cfg
 }
 
 // Validate validates the config

@@ -13,9 +13,11 @@ import (
 	"strings"
 
 	"github.com/nyaruka/courier"
+	"github.com/nyaruka/courier/core/models"
 	"github.com/nyaruka/courier/handlers"
 	"github.com/nyaruka/gocommon/stringsx"
 	"github.com/nyaruka/gocommon/urns"
+	"github.com/nyaruka/gocommon/uuids"
 )
 
 var (
@@ -37,7 +39,7 @@ type handler struct {
 // NewHandler returns a new DartMedia ready to be registered
 func NewHandler(channelType string, name string, sendURL string, maxLength int) courier.ChannelHandler {
 	return &handler{
-		handlers.NewBaseHandler(courier.ChannelType(channelType), name),
+		handlers.NewBaseHandler(models.ChannelType(channelType), name),
 		sendURL,
 		maxLength,
 	}
@@ -112,22 +114,22 @@ func (h *handler) receiveStatus(ctx context.Context, channel courier.Channel, w 
 		return nil, handlers.WriteAndLogRequestError(ctx, h, channel, w, r, fmt.Errorf("parsing failed: status '%s' is not an integer", form.Status))
 	}
 
-	msgStatus := courier.MsgStatusSent
+	msgStatus := models.MsgStatusSent
 	if statusInt >= 10 && statusInt <= 12 {
-		msgStatus = courier.MsgStatusDelivered
+		msgStatus = models.MsgStatusDelivered
 	}
 
 	if statusInt > 20 {
-		msgStatus = courier.MsgStatusFailed
+		msgStatus = models.MsgStatusFailed
 	}
 
-	msgID, err := strconv.ParseInt(strings.Split(form.MessageID, ".")[0], 10, 64)
-	if err != nil {
-		return nil, handlers.WriteAndLogRequestError(ctx, h, channel, w, r, fmt.Errorf("parsing failed: messageid '%s' is not an integer", form.MessageID))
+	msgUUID := strings.Split(form.MessageID, ".")[0]
+	if !uuids.Is(msgUUID) {
+		return nil, handlers.WriteAndLogRequestError(ctx, h, channel, w, r, fmt.Errorf("parsing failed: messageid '%s' is not a UUID", form.MessageID))
 	}
 
 	// write our status
-	status := h.Backend().NewStatusUpdate(channel, courier.MsgID(msgID), msgStatus, clog)
+	status := h.Backend().NewStatusUpdate(channel, models.MsgUUID(msgUUID), msgStatus, clog)
 	return handlers.WriteMsgStatusAndResponse(ctx, h, channel, status, w, r)
 }
 
@@ -146,8 +148,8 @@ func (h *handler) WriteMsgSuccessResponse(ctx context.Context, w http.ResponseWr
 }
 
 func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.SendResult, clog *courier.ChannelLog) error {
-	username := msg.Channel().StringConfigForKey(courier.ConfigUsername, "")
-	password := msg.Channel().StringConfigForKey(courier.ConfigPassword, "")
+	username := msg.Channel().StringConfigForKey(models.ConfigUsername, "")
+	password := msg.Channel().StringConfigForKey(models.ConfigPassword, "")
 	if username == "" || password == "" {
 		return courier.ErrChannelConfig
 	}
@@ -164,9 +166,9 @@ func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.Sen
 			"message":  []string{part},
 		}
 
-		messageid := msg.ID().String()
+		messageid := string(msg.UUID())
 		if i > 0 {
-			messageid = fmt.Sprintf("%s.%d", msg.ID().String(), i+1)
+			messageid = fmt.Sprintf("%s.%d", msg.UUID(), i+1)
 		}
 		form["messageid"] = []string{messageid}
 

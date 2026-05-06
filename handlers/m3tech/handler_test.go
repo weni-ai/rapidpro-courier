@@ -45,10 +45,6 @@ func TestIncoming(t *testing.T) {
 	RunIncomingTestCases(t, testChannels, newHandler(), handleTestCases)
 }
 
-func BenchmarkHandler(b *testing.B) {
-	RunChannelBenchmarks(b, testChannels, newHandler(), handleTestCases)
-}
-
 var defaultSendTestCases = []OutgoingTestCase{
 	{
 		Label:   "Plain Send",
@@ -67,7 +63,7 @@ var defaultSendTestCases = []OutgoingTestCase{
 				"AuthKey":     {"m3-Tech"},
 				"HandsetPort": {"0"},
 				"MsgHeader":   {"2020"},
-				"MsgId":       {"10"},
+				"MsgId":       {"0191e180-7d60-7000-aded-7d8b151cbd5b"},
 				"Telco":       {"0"},
 				"SMSType":     {"0"},
 				"UserId":      {"Username"},
@@ -92,7 +88,7 @@ var defaultSendTestCases = []OutgoingTestCase{
 				"AuthKey":     {"m3-Tech"},
 				"HandsetPort": {"0"},
 				"MsgHeader":   {"2020"},
-				"MsgId":       {"10"},
+				"MsgId":       {"0191e180-7d60-7000-aded-7d8b151cbd5b"},
 				"Telco":       {"0"},
 				"SMSType":     {"7"},
 				"UserId":      {"Username"},
@@ -117,7 +113,7 @@ var defaultSendTestCases = []OutgoingTestCase{
 				"AuthKey":     {"m3-Tech"},
 				"HandsetPort": {"0"},
 				"MsgHeader":   {"2020"},
-				"MsgId":       {"10"},
+				"MsgId":       {"0191e180-7d60-7000-aded-7d8b151cbd5b"},
 				"Telco":       {"0"},
 				"SMSType":     {"0"},
 				"UserId":      {"Username"},
@@ -143,7 +139,7 @@ var defaultSendTestCases = []OutgoingTestCase{
 				"AuthKey":     {"m3-Tech"},
 				"HandsetPort": {"0"},
 				"MsgHeader":   {"2020"},
-				"MsgId":       {"10"},
+				"MsgId":       {"0191e180-7d60-7000-aded-7d8b151cbd5b"},
 				"Telco":       {"0"},
 				"SMSType":     {"0"},
 				"UserId":      {"Username"},

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/nyaruka/courier"
+	"github.com/nyaruka/courier/core/models"
 )
 
 type MsgPartType int
@@ -22,7 +23,7 @@ type MsgPart struct {
 	Type       MsgPartType
 	Text       string
 	Attachment string
-	OptIn      *courier.OptInReference
+	OptIn      *models.OptInReference
 	IsFirst    bool
 	IsLast     bool
 }
@@ -73,7 +74,7 @@ func SplitMsg(m courier.MsgOut, opts SplitOptions) []MsgPart {
 
 // deprecated use SplitMsg instead
 func SplitMsgByChannel(channel courier.Channel, text string, maxLength int) []string {
-	max := channel.IntConfigForKey(courier.ConfigMaxLength, maxLength)
+	max := channel.IntConfigForKey(models.ConfigMaxLength, maxLength)
 
 	return SplitText(text, max)
 }

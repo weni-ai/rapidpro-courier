@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/nyaruka/courier"
+	"github.com/nyaruka/courier/core/models"
 	. "github.com/nyaruka/courier/handlers"
 	"github.com/nyaruka/courier/test"
 	"github.com/nyaruka/gocommon/httpx"
@@ -55,7 +56,7 @@ var defaultSendTestCases = []OutgoingTestCase{
 		},
 		ExpectedRequests: []ExpectedRequest{{
 			Headers: map[string]string{"Content-Type": "application/json", "Accept": "application/json"},
-			Body:    `{"auth_token":"Token","receiver":"xy5/5y6O81+/kbWHpLhBoA==","text":"Simple Message","type":"text","tracking_data":"10"}`,
+			Body:    `{"auth_token":"Token","receiver":"xy5/5y6O81+/kbWHpLhBoA==","text":"Simple Message","type":"text","tracking_data":"0191e180-7d60-7000-aded-7d8b151cbd5b"}`,
 		}},
 	},
 	{
@@ -71,11 +72,11 @@ var defaultSendTestCases = []OutgoingTestCase{
 		ExpectedRequests: []ExpectedRequest{
 			{
 				Headers: map[string]string{"Content-Type": "application/json", "Accept": "application/json"},
-				Body:    `{"auth_token":"Token","receiver":"xy5/5y6O81+/kbWHpLhBoA==","text":"This is a longer message than 160 characters and will cause us to split it into two separate parts, isn't that right but it is even longer than before I say,","type":"text","tracking_data":"10"}`,
+				Body:    `{"auth_token":"Token","receiver":"xy5/5y6O81+/kbWHpLhBoA==","text":"This is a longer message than 160 characters and will cause us to split it into two separate parts, isn't that right but it is even longer than before I say,","type":"text","tracking_data":"0191e180-7d60-7000-aded-7d8b151cbd5b"}`,
 			},
 			{
 				Headers: map[string]string{"Content-Type": "application/json", "Accept": "application/json"},
-				Body:    `{"auth_token":"Token","receiver":"xy5/5y6O81+/kbWHpLhBoA==","text":"I need to keep adding more things to make it work","type":"text","tracking_data":"10"}`,
+				Body:    `{"auth_token":"Token","receiver":"xy5/5y6O81+/kbWHpLhBoA==","text":"I need to keep adding more things to make it work","type":"text","tracking_data":"0191e180-7d60-7000-aded-7d8b151cbd5b"}`,
 			},
 		},
 	},
@@ -90,14 +91,14 @@ var defaultSendTestCases = []OutgoingTestCase{
 		},
 		ExpectedRequests: []ExpectedRequest{{
 			Headers: map[string]string{"Content-Type": "application/json", "Accept": "application/json"},
-			Body:    `{"auth_token":"Token","receiver":"xy5/5y6O81+/kbWHpLhBoA==","text":"☺","type":"text","tracking_data":"10"}`,
+			Body:    `{"auth_token":"Token","receiver":"xy5/5y6O81+/kbWHpLhBoA==","text":"☺","type":"text","tracking_data":"0191e180-7d60-7000-aded-7d8b151cbd5b"}`,
 		}},
 	},
 	{
 		Label:           "Quick Reply",
 		MsgText:         "Are you happy?",
 		MsgURN:          "viber:xy5/5y6O81+/kbWHpLhBoA==",
-		MsgQuickReplies: []courier.QuickReply{{Text: "Yes"}, {Text: "No"}},
+		MsgQuickReplies: []models.QuickReply{{Text: "Yes"}, {Text: "No"}},
 		MockResponses: map[string][]*httpx.MockResponse{
 			"https://chatapi.viber.com/pa/send_message": {
 				httpx.NewMockResponse(200, nil, []byte(`{"status":0,"status_message":"ok","message_token":4987381194038857789}`)),
@@ -105,7 +106,7 @@ var defaultSendTestCases = []OutgoingTestCase{
 		},
 		ExpectedRequests: []ExpectedRequest{{
 			Headers: map[string]string{"Content-Type": "application/json", "Accept": "application/json"},
-			Body:    `{"auth_token":"Token","receiver":"xy5/5y6O81+/kbWHpLhBoA==","text":"Are you happy?","type":"text","tracking_data":"10","keyboard":{"Type":"keyboard","DefaultHeight":false,"Buttons":[{"ActionType":"reply","ActionBody":"Yes","Text":"Yes","TextSize":"regular","Columns":"3"},{"ActionType":"reply","ActionBody":"No","Text":"No","TextSize":"regular","Columns":"3"}]}}`,
+			Body:    `{"auth_token":"Token","receiver":"xy5/5y6O81+/kbWHpLhBoA==","text":"Are you happy?","type":"text","tracking_data":"0191e180-7d60-7000-aded-7d8b151cbd5b","keyboard":{"Type":"keyboard","DefaultHeight":false,"Buttons":[{"ActionType":"reply","ActionBody":"Yes","Text":"Yes","TextSize":"regular","Columns":"3"},{"ActionType":"reply","ActionBody":"No","Text":"No","TextSize":"regular","Columns":"3"}]}}`,
 		}},
 	},
 	{
@@ -120,7 +121,7 @@ var defaultSendTestCases = []OutgoingTestCase{
 		},
 		ExpectedRequests: []ExpectedRequest{{
 			Headers: map[string]string{"Content-Type": "application/json", "Accept": "application/json"},
-			Body:    `{"auth_token":"Token","receiver":"xy5/5y6O81+/kbWHpLhBoA==","text":"My pic!","type":"picture","tracking_data":"10","media":"{{ SERVER_URL }}/image.jpg"}`,
+			Body:    `{"auth_token":"Token","receiver":"xy5/5y6O81+/kbWHpLhBoA==","text":"My pic!","type":"picture","tracking_data":"0191e180-7d60-7000-aded-7d8b151cbd5b","media":"{{ SERVER_URL }}/image.jpg"}`,
 		}},
 	},
 	{
@@ -137,11 +138,11 @@ var defaultSendTestCases = []OutgoingTestCase{
 		ExpectedRequests: []ExpectedRequest{
 			{
 				Headers: map[string]string{"Content-Type": "application/json", "Accept": "application/json"},
-				Body:    `{"auth_token":"Token","receiver":"xy5/5y6O81+/kbWHpLhBoA==","type":"picture","tracking_data":"10","media":"{{ SERVER_URL }}/image.jpg"}`,
+				Body:    `{"auth_token":"Token","receiver":"xy5/5y6O81+/kbWHpLhBoA==","type":"picture","tracking_data":"0191e180-7d60-7000-aded-7d8b151cbd5b","media":"{{ SERVER_URL }}/image.jpg"}`,
 			},
 			{
 				Headers: map[string]string{"Content-Type": "application/json", "Accept": "application/json"},
-				Body:    `{"auth_token":"Token","receiver":"xy5/5y6O81+/kbWHpLhBoA==","text":"Text description is longer that 10 characters","type":"text","tracking_data":"10"}`,
+				Body:    `{"auth_token":"Token","receiver":"xy5/5y6O81+/kbWHpLhBoA==","text":"Text description is longer that 10 characters","type":"text","tracking_data":"0191e180-7d60-7000-aded-7d8b151cbd5b"}`,
 			},
 		},
 	},
@@ -167,11 +168,11 @@ var defaultSendTestCases = []OutgoingTestCase{
 			{
 
 				Headers: map[string]string{"Content-Type": "application/json", "Accept": "application/json"},
-				Body:    `{"auth_token":"Token","receiver":"xy5/5y6O81+/kbWHpLhBoA==","type":"video","tracking_data":"10","media":"{{ SERVER_URL }}/video.mp4","size":12}`,
+				Body:    `{"auth_token":"Token","receiver":"xy5/5y6O81+/kbWHpLhBoA==","type":"video","tracking_data":"0191e180-7d60-7000-aded-7d8b151cbd5b","media":"{{ SERVER_URL }}/video.mp4","size":12}`,
 			},
 			{
 				Headers: map[string]string{"Content-Type": "application/json", "Accept": "application/json"},
-				Body:    `{"auth_token":"Token","receiver":"xy5/5y6O81+/kbWHpLhBoA==","text":"My video!","type":"text","tracking_data":"10"}`,
+				Body:    `{"auth_token":"Token","receiver":"xy5/5y6O81+/kbWHpLhBoA==","text":"My video!","type":"text","tracking_data":"0191e180-7d60-7000-aded-7d8b151cbd5b"}`,
 			},
 		},
 	},
@@ -196,11 +197,11 @@ var defaultSendTestCases = []OutgoingTestCase{
 			},
 			{
 				Headers: map[string]string{"Content-Type": "application/json", "Accept": "application/json"},
-				Body:    `{"auth_token":"Token","receiver":"xy5/5y6O81+/kbWHpLhBoA==","type":"file","tracking_data":"10","media":"{{ SERVER_URL }}/audio.mp3","size":12,"file_name":"Audio"}`,
+				Body:    `{"auth_token":"Token","receiver":"xy5/5y6O81+/kbWHpLhBoA==","type":"file","tracking_data":"0191e180-7d60-7000-aded-7d8b151cbd5b","media":"{{ SERVER_URL }}/audio.mp3","size":12,"file_name":"Audio"}`,
 			},
 			{
 				Headers: map[string]string{"Content-Type": "application/json", "Accept": "application/json"},
-				Body:    `{"auth_token":"Token","receiver":"xy5/5y6O81+/kbWHpLhBoA==","text":"My audio!","type":"text","tracking_data":"10"}`,
+				Body:    `{"auth_token":"Token","receiver":"xy5/5y6O81+/kbWHpLhBoA==","text":"My audio!","type":"text","tracking_data":"0191e180-7d60-7000-aded-7d8b151cbd5b"}`,
 			},
 		},
 	},
@@ -215,7 +216,7 @@ var defaultSendTestCases = []OutgoingTestCase{
 		},
 		ExpectedRequests: []ExpectedRequest{{
 			Headers: map[string]string{"Content-Type": "application/json", "Accept": "application/json"},
-			Body:    `{"auth_token":"Token","receiver":"xy5/5y6O81+/kbWHpLhBoA==","text":"Simple Message","type":"text","tracking_data":"10"}`,
+			Body:    `{"auth_token":"Token","receiver":"xy5/5y6O81+/kbWHpLhBoA==","text":"Simple Message","type":"text","tracking_data":"0191e180-7d60-7000-aded-7d8b151cbd5b"}`,
 		}},
 		ExpectedError: courier.ErrFailedWithReason("3", "There is an error in the request itself (missing comma, brackets, etc.)"),
 	},
@@ -230,7 +231,7 @@ var defaultSendTestCases = []OutgoingTestCase{
 		},
 		ExpectedRequests: []ExpectedRequest{{
 			Headers: map[string]string{"Content-Type": "application/json", "Accept": "application/json"},
-			Body:    `{"auth_token":"Token","receiver":"xy5/5y6O81+/kbWHpLhBoA==","text":"Simple Message","type":"text","tracking_data":"10"}`,
+			Body:    `{"auth_token":"Token","receiver":"xy5/5y6O81+/kbWHpLhBoA==","text":"Simple Message","type":"text","tracking_data":"0191e180-7d60-7000-aded-7d8b151cbd5b"}`,
 		}},
 
 		ExpectedError: courier.ErrFailedWithReason("99", "General error"),
@@ -246,7 +247,7 @@ var defaultSendTestCases = []OutgoingTestCase{
 		},
 		ExpectedRequests: []ExpectedRequest{{
 			Headers: map[string]string{"Content-Type": "application/json", "Accept": "application/json"},
-			Body:    `{"auth_token":"Token","receiver":"xy5/5y6O81+/kbWHpLhBoA==","text":"Simple Message","type":"text","tracking_data":"10"}`,
+			Body:    `{"auth_token":"Token","receiver":"xy5/5y6O81+/kbWHpLhBoA==","text":"Simple Message","type":"text","tracking_data":"0191e180-7d60-7000-aded-7d8b151cbd5b"}`,
 		}},
 		ExpectedError: courier.ErrResponseUnparseable,
 	},
@@ -261,7 +262,7 @@ var defaultSendTestCases = []OutgoingTestCase{
 		},
 		ExpectedRequests: []ExpectedRequest{{
 			Headers: map[string]string{"Content-Type": "application/json", "Accept": "application/json"},
-			Body:    `{"auth_token":"Token","receiver":"xy5/5y6O81+/kbWHpLhBoA==","text":"Error Message","type":"text","tracking_data":"10"}`,
+			Body:    `{"auth_token":"Token","receiver":"xy5/5y6O81+/kbWHpLhBoA==","text":"Error Message","type":"text","tracking_data":"0191e180-7d60-7000-aded-7d8b151cbd5b"}`,
 		}},
 		ExpectedError: courier.ErrResponseStatus,
 	},
@@ -279,14 +280,14 @@ var buttonLayoutSendTestCases = []OutgoingTestCase{
 		Label:           "Quick Reply With Layout With Column, Row and BgColor definitions",
 		MsgText:         "Select a, b, c or d.",
 		MsgURN:          "viber:xy5/5y6O81+/kbWHpLhBoA==",
-		MsgQuickReplies: []courier.QuickReply{{Text: "a"}, {Text: "b"}, {Text: "c"}, {Text: "d"}},
+		MsgQuickReplies: []models.QuickReply{{Text: "a"}, {Text: "b"}, {Text: "c"}, {Text: "d"}},
 		MockResponses: map[string][]*httpx.MockResponse{
 			"https://chatapi.viber.com/pa/send_message": {
 				httpx.NewMockResponse(200, nil, []byte(`{"status":0,"status_message":"ok","message_token":4987381194038857789}`)),
 			},
 		},
 		ExpectedRequests: []ExpectedRequest{{
-			Body: `{"auth_token":"Token","receiver":"xy5/5y6O81+/kbWHpLhBoA==","text":"Select a, b, c or d.","type":"text","tracking_data":"10","keyboard":{"Type":"keyboard","DefaultHeight":false,"Buttons":[{"ActionType":"reply","ActionBody":"a","Text":"\u003cfont color=\"#ffffff\"\u003ea\u003c/font\u003e\u003cbr\u003e\u003cbr\u003e","TextSize":"large","Columns":"2","BgColor":"#f7bb3f"},{"ActionType":"reply","ActionBody":"b","Text":"\u003cfont color=\"#ffffff\"\u003eb\u003c/font\u003e\u003cbr\u003e\u003cbr\u003e","TextSize":"large","Columns":"2","BgColor":"#f7bb3f"},{"ActionType":"reply","ActionBody":"c","Text":"\u003cfont color=\"#ffffff\"\u003ec\u003c/font\u003e\u003cbr\u003e\u003cbr\u003e","TextSize":"large","Columns":"2","BgColor":"#f7bb3f"},{"ActionType":"reply","ActionBody":"d","Text":"\u003cfont color=\"#ffffff\"\u003ed\u003c/font\u003e\u003cbr\u003e\u003cbr\u003e","TextSize":"large","Columns":"6","BgColor":"#f7bb3f"}]}}`,
+			Body: `{"auth_token":"Token","receiver":"xy5/5y6O81+/kbWHpLhBoA==","text":"Select a, b, c or d.","type":"text","tracking_data":"0191e180-7d60-7000-aded-7d8b151cbd5b","keyboard":{"Type":"keyboard","DefaultHeight":false,"Buttons":[{"ActionType":"reply","ActionBody":"a","Text":"\u003cfont color=\"#ffffff\"\u003ea\u003c/font\u003e\u003cbr\u003e\u003cbr\u003e","TextSize":"large","Columns":"2","BgColor":"#f7bb3f"},{"ActionType":"reply","ActionBody":"b","Text":"\u003cfont color=\"#ffffff\"\u003eb\u003c/font\u003e\u003cbr\u003e\u003cbr\u003e","TextSize":"large","Columns":"2","BgColor":"#f7bb3f"},{"ActionType":"reply","ActionBody":"c","Text":"\u003cfont color=\"#ffffff\"\u003ec\u003c/font\u003e\u003cbr\u003e\u003cbr\u003e","TextSize":"large","Columns":"2","BgColor":"#f7bb3f"},{"ActionType":"reply","ActionBody":"d","Text":"\u003cfont color=\"#ffffff\"\u003ed\u003c/font\u003e\u003cbr\u003e\u003cbr\u003e","TextSize":"large","Columns":"6","BgColor":"#f7bb3f"}]}}`,
 		}},
 	},
 }
@@ -300,7 +301,7 @@ func TestOutgoing(t *testing.T) {
 	var defaultChannel = test.NewMockChannel("8eb23e93-5ecb-45ba-b726-3b064e0c56ab", "VP", "2020", "",
 		[]string{urns.Viber.Prefix},
 		map[string]any{
-			courier.ConfigAuthToken: "Token",
+			models.ConfigAuthToken: "Token",
 		})
 	var invalidTokenChannel = test.NewMockChannel("8eb23e93-5ecb-45ba-b726-3b064e0c56ab", "VP", "2020", "",
 		[]string{urns.Viber.Prefix},
@@ -309,8 +310,8 @@ func TestOutgoing(t *testing.T) {
 	var buttonLayoutChannel = test.NewMockChannel("8eb23e93-5ecb-45ba-b726-3b064e0c56ab", "VP", "2021", "",
 		[]string{urns.Viber.Prefix},
 		map[string]any{
-			courier.ConfigAuthToken: "Token",
-			"button_layout":         map[string]any{"bg_color": "#f7bb3f", "text": "<font color=\"#ffffff\">*</font><br><br>", "text_size": "large"},
+			models.ConfigAuthToken: "Token",
+			"button_layout":        map[string]any{"bg_color": "#f7bb3f", "text": "<font color=\"#ffffff\">*</font><br><br>", "text_size": "large"},
 		})
 	RunOutgoingTestCases(t, defaultChannel, newHandler(), defaultSendTestCases, []string{"Token"}, nil)
 	RunOutgoingTestCases(t, invalidTokenChannel, newHandler(), invalidTokenSendTestCases, []string{"Token"}, nil)
@@ -319,13 +320,13 @@ func TestOutgoing(t *testing.T) {
 
 var testChannels = []courier.Channel{
 	test.NewMockChannel("8eb23e93-5ecb-45ba-b726-3b064e0c56ab", "VP", "2020", "", []string{urns.Viber.Prefix}, map[string]any{
-		courier.ConfigAuthToken: "Token",
+		models.ConfigAuthToken: "Token",
 	}),
 }
 
 var testChannelsWithWelcomeMessage = []courier.Channel{
 	test.NewMockChannel("8eb23e93-5ecb-45ba-b726-3b064e0c56ab", "VP", "2020", "", []string{urns.Viber.Prefix}, map[string]any{
-		courier.ConfigAuthToken:   "Token",
+		models.ConfigAuthToken:    "Token",
 		configViberWelcomeMessage: "Welcome to VP, Please subscribe here for more.",
 	}),
 }
@@ -598,7 +599,7 @@ var testCases = []IncomingTestCase{
 		Data:                 failedStatusReport,
 		ExpectedRespStatus:   200,
 		ExpectedBodyContains: `"status":"F"`,
-		ExpectedStatuses:     []ExpectedStatus{{ExternalID: "4912661846655238145", Status: courier.MsgStatusFailed}},
+		ExpectedStatuses:     []ExpectedStatus{{ExternalID: "4912661846655238145", Status: models.MsgStatusFailed}},
 		PrepRequest:          addValidSignature,
 	},
 	{Label: "Delivered Status Report", URL: receiveURL, Data: deliveredStatusReport, ExpectedRespStatus: 200, ExpectedBodyContains: `Ignored`, PrepRequest: addValidSignature},
@@ -609,7 +610,7 @@ var testCases = []IncomingTestCase{
 		ExpectedRespStatus:   200,
 		ExpectedBodyContains: "Accepted",
 		ExpectedEvents: []ExpectedEvent{
-			{Type: courier.EventTypeNewConversation, URN: "viber:01234567890A="},
+			{Type: models.EventTypeNewConversation, URN: "viber:01234567890A="},
 		},
 		PrepRequest: addValidSignature,
 	},
@@ -628,12 +629,16 @@ var testCases = []IncomingTestCase{
 		ExpectedRespStatus:   200,
 		ExpectedBodyContains: "Accepted",
 		ExpectedEvents: []ExpectedEvent{
-			{Type: courier.EventTypeStopContact, URN: "viber:01234567890A="},
+			{Type: models.EventTypeStopContact, URN: "viber:01234567890A="},
 		},
 		PrepRequest: addValidSignature,
 	},
-	{Label: "Unsubcribe Invalid URN", URL: receiveURL, Data: invalidURNUnsubscribed, ExpectedRespStatus: 400, ExpectedBodyContains: "invalid viber id", PrepRequest: addValidSignature},
-	{Label: "Conversation Started", URL: receiveURL, Data: validConversationStarted, ExpectedRespStatus: 200, ExpectedBodyContains: "ignored conversation start", PrepRequest: addValidSignature},
+	{
+		Label: "Unsubcribe Invalid URN", URL: receiveURL, Data: invalidURNUnsubscribed, ExpectedRespStatus: 400, ExpectedBodyContains: "invalid viber id", PrepRequest: addValidSignature,
+	},
+	{
+		Label: "Conversation Started", URL: receiveURL, Data: validConversationStarted, ExpectedRespStatus: 200, ExpectedBodyContains: "ignored conversation start", PrepRequest: addValidSignature,
+	},
 	{Label: "Unexpected event", URL: receiveURL, Data: unexpectedEvent, ExpectedRespStatus: 400,
 		ExpectedBodyContains: "not handled, unknown event: unexpected", PrepRequest: addValidSignature},
 	{Label: "Message missing text", URL: receiveURL, Data: rejectedMessage, ExpectedRespStatus: 400, ExpectedBodyContains: "missing text or media in message in request body", PrepRequest: addValidSignature},
@@ -671,9 +676,9 @@ var testWelcomeMessageCases = []IncomingTestCase{
 		URL:                  receiveURL,
 		Data:                 validConversationStarted,
 		ExpectedRespStatus:   200,
-		ExpectedBodyContains: `{"auth_token":"Token","text":"Welcome to VP, Please subscribe here for more.","type":"text","tracking_data":"0"}`,
+		ExpectedBodyContains: `{"auth_token":"Token","text":"Welcome to VP, Please subscribe here for more.","type":"text","tracking_data":"0199dd4c-8a88-7000-95b3-58675999c4b7"}`,
 		ExpectedEvents: []ExpectedEvent{
-			{Type: courier.EventTypeWelcomeMessage, URN: "viber:xy5/5y6O81+/kbWHpLhBoA=="},
+			{Type: models.EventTypeWelcomeMessage, URN: "viber:xy5/5y6O81+/kbWHpLhBoA=="},
 		},
 		PrepRequest: addValidSignature,
 	},
@@ -704,9 +709,4 @@ func addInvalidSignature(r *http.Request) {
 func TestIncoming(t *testing.T) {
 	RunIncomingTestCases(t, testChannels, newHandler(), testCases)
 	RunIncomingTestCases(t, testChannelsWithWelcomeMessage, newHandler(), testWelcomeMessageCases)
-}
-
-func BenchmarkHandler(b *testing.B) {
-	RunChannelBenchmarks(b, testChannels, newHandler(), testCases)
-	RunChannelBenchmarks(b, testChannelsWithWelcomeMessage, newHandler(), testWelcomeMessageCases)
 }

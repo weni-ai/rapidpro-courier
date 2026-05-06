@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nyaruka/courier"
+	"github.com/nyaruka/courier/core/models"
 	"github.com/nyaruka/courier/handlers"
 	"github.com/nyaruka/gocommon/urns"
 	"github.com/sirupsen/logrus"
@@ -26,7 +27,7 @@ type handler struct {
 }
 
 func newHandler() courier.ChannelHandler {
-	return &handler{handlers.NewBaseHandler(courier.ChannelType("WWC"), "Weni Web Chat")}
+	return &handler{handlers.NewBaseHandler(models.ChannelType("WWC"), "Weni Web Chat")}
 }
 
 // Initialize is called by the engine once everything is loaded
@@ -121,9 +122,9 @@ type moMessage struct {
 }
 
 func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.SendResult, clog *courier.ChannelLog) error {
-	status := h.Backend().NewStatusUpdate(msg.Channel(), msg.ID(), courier.MsgStatusSent, clog)
+	status := h.Backend().NewStatusUpdate(msg.Channel(), msg.UUID(), models.MsgStatusSent, clog)
 
-	baseURL := msg.Channel().StringConfigForKey(courier.ConfigBaseURL, "")
+	baseURL := msg.Channel().StringConfigForKey(models.ConfigBaseURL, "")
 	if baseURL == "" {
 		return errors.New("blank base_url")
 	}
@@ -161,7 +162,7 @@ func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.Sen
 				}
 			} else {
 				logrus.WithField("channel_uuid", msg.Channel().UUID()).Error("unknown attachment mime type: ", mimeType)
-				status.SetStatus(courier.MsgStatusFailed)
+				status.SetStatus(models.MsgStatusFailed)
 				break attachmentsLoop
 			}
 
@@ -180,7 +181,7 @@ func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.Sen
 			body, err := json.Marshal(&payload)
 			if err != nil {
 				logrus.WithField("channel_uuid", msg.Channel().UUID()).WithError(err).Error("Error sending message")
-				status.SetStatus(courier.MsgStatusFailed)
+				status.SetStatus(models.MsgStatusFailed)
 				break attachmentsLoop
 			}
 			req, _ := http.NewRequest(http.MethodPost, sendURL, bytes.NewBuffer(body))
@@ -188,10 +189,10 @@ func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.Sen
 			_, _, err = h.RequestHTTP(req, clog)
 			if err != nil {
 				logrus.WithField("channel_uuid", msg.Channel().UUID()).WithError(err).Error("Message Send Error")
-				status.SetStatus(courier.MsgStatusFailed)
+				status.SetStatus(models.MsgStatusFailed)
 			}
 			if err != nil {
-				status.SetStatus(courier.MsgStatusFailed)
+				status.SetStatus(models.MsgStatusFailed)
 				break attachmentsLoop
 			}
 		}
@@ -206,14 +207,14 @@ func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.Sen
 		body, err := json.Marshal(&payload)
 		if err != nil {
 			logrus.WithField("channel_uuid", msg.Channel().UUID()).WithError(err).Error("Message Send Error")
-			status.SetStatus(courier.MsgStatusFailed)
-			status.SetStatus(courier.MsgStatusFailed)
+			status.SetStatus(models.MsgStatusFailed)
+			status.SetStatus(models.MsgStatusFailed)
 		} else {
 			req, _ := http.NewRequest(http.MethodPost, sendURL, bytes.NewBuffer(body))
 			req.Header.Set("Content-Type", "application/json")
 			_, _, err := h.RequestHTTP(req, clog)
 			if err != nil {
-				status.SetStatus(courier.MsgStatusFailed)
+				status.SetStatus(models.MsgStatusFailed)
 			}
 		}
 

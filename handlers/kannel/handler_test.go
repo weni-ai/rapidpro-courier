@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/nyaruka/courier"
+	"github.com/nyaruka/courier/core/models"
 	. "github.com/nyaruka/courier/handlers"
 	"github.com/nyaruka/courier/test"
 	"github.com/nyaruka/gocommon/httpx"
@@ -109,13 +110,13 @@ var ignoreTestCases = []IncomingTestCase{
 	// },
 	{
 		Label:                "Ignore Status Wired",
-		URL:                  "/c/kn/8eb23e93-5ecb-45ba-b726-3b064e0c56ab/status/?id=12345&status=4",
+		URL:                  "/c/kn/8eb23e93-5ecb-45ba-b726-3b064e0c56ab/status/?uuid=019a06fa-467d-7786-b9cb-5b42177cd53f&status=4",
 		ExpectedRespStatus:   200,
 		ExpectedBodyContains: `ignoring sent report`,
 	},
 	{
 		Label:                "Ignore Status Sent",
-		URL:                  "/c/kn/8eb23e93-5ecb-45ba-b726-3b064e0c56ab/status/?id=12345&status=8",
+		URL:                  "/c/kn/8eb23e93-5ecb-45ba-b726-3b064e0c56ab/status/?uuid=019a06fa-467d-7786-b9cb-5b42177cd53f&status=8",
 		ExpectedRespStatus:   200,
 		ExpectedBodyContains: `ignoring sent report`,
 	},
@@ -124,10 +125,6 @@ var ignoreTestCases = []IncomingTestCase{
 func TestIncoming(t *testing.T) {
 	RunIncomingTestCases(t, testChannels, newHandler(), handleTestCases)
 	RunIncomingTestCases(t, ignoreChannels, newHandler(), ignoreTestCases)
-}
-
-func BenchmarkHandler(b *testing.B) {
-	RunChannelBenchmarks(b, testChannels, newHandler(), handleTestCases)
 }
 
 var defaultSendTestCases = []OutgoingTestCase{
@@ -147,7 +144,7 @@ var defaultSendTestCases = []OutgoingTestCase{
 				"to":       {"+250788383383"},
 				"from":     {"2020"},
 				"dlr-mask": {"27"},
-				"dlr-url":  {"https://localhost/c/kn/8eb23e93-5ecb-45ba-b726-3b064e0c56ab/status?id=10&status=%d"},
+				"dlr-url":  {"https://localhost/c/kn/8eb23e93-5ecb-45ba-b726-3b064e0c56ab/status?uuid=0191e180-7d60-7000-aded-7d8b151cbd5b&status=%d"},
 				"username": {"Username"},
 				"password": {"Password"},
 			},
@@ -171,7 +168,7 @@ var defaultSendTestCases = []OutgoingTestCase{
 				"coding":   {"2"},
 				"charset":  {"utf8"},
 				"dlr-mask": {"27"},
-				"dlr-url":  {"https://localhost/c/kn/8eb23e93-5ecb-45ba-b726-3b064e0c56ab/status?id=10&status=%d"},
+				"dlr-url":  {"https://localhost/c/kn/8eb23e93-5ecb-45ba-b726-3b064e0c56ab/status?uuid=0191e180-7d60-7000-aded-7d8b151cbd5b&status=%d"},
 				"username": {"Username"},
 				"password": {"Password"},
 			},
@@ -193,7 +190,7 @@ var defaultSendTestCases = []OutgoingTestCase{
 				"to":       {"+250788383383"},
 				"from":     {"2020"},
 				"dlr-mask": {"27"},
-				"dlr-url":  {"https://localhost/c/kn/8eb23e93-5ecb-45ba-b726-3b064e0c56ab/status?id=10&status=%d"},
+				"dlr-url":  {"https://localhost/c/kn/8eb23e93-5ecb-45ba-b726-3b064e0c56ab/status?uuid=0191e180-7d60-7000-aded-7d8b151cbd5b&status=%d"},
 				"username": {"Username"},
 				"password": {"Password"},
 			},
@@ -215,7 +212,7 @@ var defaultSendTestCases = []OutgoingTestCase{
 				"to":       {"+250788383383"},
 				"from":     {"2020"},
 				"dlr-mask": {"27"},
-				"dlr-url":  {"https://localhost/c/kn/8eb23e93-5ecb-45ba-b726-3b064e0c56ab/status?id=10&status=%d"},
+				"dlr-url":  {"https://localhost/c/kn/8eb23e93-5ecb-45ba-b726-3b064e0c56ab/status?uuid=0191e180-7d60-7000-aded-7d8b151cbd5b&status=%d"},
 				"username": {"Username"},
 				"password": {"Password"},
 			},
@@ -238,7 +235,7 @@ var defaultSendTestCases = []OutgoingTestCase{
 				"to":       {"+250788383383"},
 				"from":     {"2020"},
 				"dlr-mask": {"27"},
-				"dlr-url":  {"https://localhost/c/kn/8eb23e93-5ecb-45ba-b726-3b064e0c56ab/status?id=10&status=%d"},
+				"dlr-url":  {"https://localhost/c/kn/8eb23e93-5ecb-45ba-b726-3b064e0c56ab/status?uuid=0191e180-7d60-7000-aded-7d8b151cbd5b&status=%d"},
 				"username": {"Username"},
 				"password": {"Password"},
 			},
@@ -264,7 +261,7 @@ var defaultSendTestCases = []OutgoingTestCase{
 				"from":     {"2020"},
 				"priority": {"1"},
 				"dlr-mask": {"27"},
-				"dlr-url":  {"https://localhost/c/kn/8eb23e93-5ecb-45ba-b726-3b064e0c56ab/status?id=10&status=%d"},
+				"dlr-url":  {"https://localhost/c/kn/8eb23e93-5ecb-45ba-b726-3b064e0c56ab/status?uuid=0191e180-7d60-7000-aded-7d8b151cbd5b&status=%d"},
 				"username": {"Username"},
 				"password": {"Password"},
 			},
@@ -290,7 +287,7 @@ var customParamsTestCases = []OutgoingTestCase{
 				"from":     {"2020"},
 				"priority": {"1"},
 				"dlr-mask": {"27"},
-				"dlr-url":  {"https://localhost/c/kn/8eb23e93-5ecb-45ba-b726-3b064e0c56ab/status?id=10&status=%d"},
+				"dlr-url":  {"https://localhost/c/kn/8eb23e93-5ecb-45ba-b726-3b064e0c56ab/status?uuid=0191e180-7d60-7000-aded-7d8b151cbd5b&status=%d"},
 				"username": {"Username"},
 				"password": {"Password"},
 				"auth":     {"foo"},
@@ -317,7 +314,7 @@ var nationalSendTestCases = []OutgoingTestCase{
 				"from":     {"2020"},
 				"priority": {"1"},
 				"dlr-mask": {"3"},
-				"dlr-url":  {"https://localhost/c/kn/8eb23e93-5ecb-45ba-b726-3b064e0c56ab/status?id=10&status=%d"},
+				"dlr-url":  {"https://localhost/c/kn/8eb23e93-5ecb-45ba-b726-3b064e0c56ab/status?uuid=0191e180-7d60-7000-aded-7d8b151cbd5b&status=%d"},
 				"username": {"Username"},
 				"password": {"Password"},
 			},
@@ -329,28 +326,28 @@ func TestOutgoing(t *testing.T) {
 	var defaultChannel = test.NewMockChannel("8eb23e93-5ecb-45ba-b726-3b064e0c56ab", "KN", "2020", "US",
 		[]string{urns.Phone.Prefix},
 		map[string]any{
-			"password":            "Password",
-			"username":            "Username",
-			courier.ConfigSendURL: "http://example.com/send",
+			"password":           "Password",
+			"username":           "Username",
+			models.ConfigSendURL: "http://example.com/send",
 		})
 
 	var customParamsChannel = test.NewMockChannel("8eb23e93-5ecb-45ba-b726-3b064e0c56ab", "KN", "2020", "US",
 		[]string{urns.Phone.Prefix},
 		map[string]any{
-			"password":            "Password",
-			"username":            "Username",
-			courier.ConfigSendURL: "http://example.com/send?auth=foo",
+			"password":           "Password",
+			"username":           "Username",
+			models.ConfigSendURL: "http://example.com/send?auth=foo",
 		})
 
 	var nationalChannel = test.NewMockChannel("8eb23e93-5ecb-45ba-b726-3b064e0c56ab", "KN", "2020", "US",
 		[]string{urns.Phone.Prefix},
 		map[string]any{
-			"password":            "Password",
-			"username":            "Username",
-			"use_national":        true,
-			"verify_ssl":          false,
-			"dlr_mask":            "3",
-			courier.ConfigSendURL: "http://example.com/send",
+			"password":           "Password",
+			"username":           "Username",
+			"use_national":       true,
+			"verify_ssl":         false,
+			"dlr_mask":           "3",
+			models.ConfigSendURL: "http://example.com/send",
 		})
 
 	RunOutgoingTestCases(t, defaultChannel, newHandler(), defaultSendTestCases, []string{"Password"}, nil)

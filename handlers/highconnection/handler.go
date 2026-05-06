@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nyaruka/courier"
+	"github.com/nyaruka/courier/core/models"
 	"github.com/nyaruka/courier/handlers"
 	"github.com/nyaruka/gocommon/urns"
 )
@@ -28,7 +29,7 @@ type handler struct {
 }
 
 func newHandler() courier.ChannelHandler {
-	return &handler{handlers.NewBaseHandler(courier.ChannelType("HX"), "High Connection")}
+	return &handler{handlers.NewBaseHandler(models.ChannelType("HX"), "High Connection")}
 }
 
 // Initialize is called by the engine once everything is loaded
@@ -88,20 +89,20 @@ func (h *handler) receiveMessage(ctx context.Context, channel courier.Channel, w
 }
 
 type statusForm struct {
-	RetID  int64 `name:"ret_id" validate:"required"`
-	Status int   `name:"status" validate:"required"`
+	RetID  string `name:"ret_id" validate:"uuid,required"`
+	Status int    `name:"status" validate:"required"`
 }
 
-var statusMapping = map[int]courier.MsgStatus{
-	2:  courier.MsgStatusFailed,
-	4:  courier.MsgStatusSent,
-	6:  courier.MsgStatusDelivered,
-	11: courier.MsgStatusFailed,
-	12: courier.MsgStatusFailed,
-	13: courier.MsgStatusFailed,
-	14: courier.MsgStatusFailed,
-	15: courier.MsgStatusFailed,
-	16: courier.MsgStatusFailed,
+var statusMapping = map[int]models.MsgStatus{
+	2:  models.MsgStatusFailed,
+	4:  models.MsgStatusSent,
+	6:  models.MsgStatusDelivered,
+	11: models.MsgStatusFailed,
+	12: models.MsgStatusFailed,
+	13: models.MsgStatusFailed,
+	14: models.MsgStatusFailed,
+	15: models.MsgStatusFailed,
+	16: models.MsgStatusFailed,
 }
 
 // receiveStatus is our HTTP handler function for status updates
@@ -118,13 +119,13 @@ func (h *handler) receiveStatus(ctx context.Context, channel courier.Channel, w 
 	}
 
 	// write our status
-	status := h.Backend().NewStatusUpdate(channel, courier.MsgID(form.RetID), msgStatus, clog)
+	status := h.Backend().NewStatusUpdate(channel, models.MsgUUID(form.RetID), msgStatus, clog)
 	return handlers.WriteMsgStatusAndResponse(ctx, h, channel, status, w, r)
 }
 
 func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.SendResult, clog *courier.ChannelLog) error {
-	username := msg.Channel().StringConfigForKey(courier.ConfigUsername, "")
-	password := msg.Channel().StringConfigForKey(courier.ConfigPassword, "")
+	username := msg.Channel().StringConfigForKey(models.ConfigUsername, "")
+	password := msg.Channel().StringConfigForKey(models.ConfigPassword, "")
 	if username == "" || password == "" {
 		return courier.ErrChannelConfig
 	}
@@ -146,7 +147,7 @@ func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.Sen
 			"password":   []string{password},
 			"text":       []string{part},
 			"to":         []string{msg.URN().Path()},
-			"ret_id":     []string{msg.ID().String()},
+			"ret_id":     []string{string(msg.UUID())},
 			"datacoding": []string{"8"},
 			"user_data":  []string{flowName},
 			"ret_url":    []string{statusURL},

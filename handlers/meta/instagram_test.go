@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"github.com/nyaruka/courier"
+	"github.com/nyaruka/courier/core/models"
 	. "github.com/nyaruka/courier/handlers"
+	"github.com/nyaruka/courier/runtime"
 	"github.com/nyaruka/courier/test"
 	"github.com/nyaruka/gocommon/httpx"
 	"github.com/nyaruka/gocommon/urns"
@@ -18,7 +20,7 @@ import (
 )
 
 var instgramTestChannels = []courier.Channel{
-	test.NewMockChannel("8eb23e93-5ecb-45ba-b726-3b064e0c568c", "IG", "12345", "", []string{urns.Instagram.Prefix}, map[string]any{courier.ConfigAuthToken: "a123"}),
+	test.NewMockChannel("8eb23e93-5ecb-45ba-b726-3b064e0c568c", "IG", "12345", "", []string{urns.Instagram.Prefix}, map[string]any{models.ConfigAuthToken: "a123"}),
 }
 
 var instagramIncomingTests = []IncomingTestCase{
@@ -88,7 +90,7 @@ var instagramIncomingTests = []IncomingTestCase{
 		ExpectedRespStatus:   200,
 		ExpectedBodyContains: "Handled",
 		ExpectedEvents: []ExpectedEvent{
-			{Type: courier.EventTypeNewConversation, URN: "instagram:5678", Time: time.Date(2016, 4, 7, 1, 11, 27, 970000000, time.UTC), Extra: map[string]string{"title": "icebreaker question", "payload": "get_started"}},
+			{Type: models.EventTypeNewConversation, URN: "instagram:5678", Time: time.Date(2016, 4, 7, 1, 11, 27, 970000000, time.UTC), Extra: map[string]string{"title": "icebreaker question", "payload": "get_started"}},
 		},
 		PrepRequest: addValidSignature,
 	},
@@ -188,7 +190,7 @@ var instagramOutgoingTests = []OutgoingTestCase{
 		Label:     "Text only chat message",
 		MsgText:   "Simple Message",
 		MsgURN:    "instagram:12345",
-		MsgOrigin: courier.MsgOriginChat,
+		MsgOrigin: models.MsgOriginChat,
 		MockResponses: map[string][]*httpx.MockResponse{
 			"https://graph.facebook.com/v18.0/me/messages*": {
 				httpx.NewMockResponse(200, nil, []byte(`{"message_id": "mid.133"}`)),
@@ -204,7 +206,7 @@ var instagramOutgoingTests = []OutgoingTestCase{
 		Label:     "Text only broadcast message",
 		MsgText:   "Simple Message",
 		MsgURN:    "instagram:12345",
-		MsgOrigin: courier.MsgOriginBroadcast,
+		MsgOrigin: models.MsgOriginBroadcast,
 		MockResponses: map[string][]*httpx.MockResponse{
 			"https://graph.facebook.com/v18.0/me/messages*": {
 				httpx.NewMockResponse(200, nil, []byte(`{"message_id": "mid.133"}`)),
@@ -220,7 +222,7 @@ var instagramOutgoingTests = []OutgoingTestCase{
 		Label:                   "Text only flow response",
 		MsgText:                 "Simple Message",
 		MsgURN:                  "instagram:12345",
-		MsgOrigin:               courier.MsgOriginFlow,
+		MsgOrigin:               models.MsgOriginFlow,
 		MsgResponseToExternalID: "23526",
 		MockResponses: map[string][]*httpx.MockResponse{
 			"https://graph.facebook.com/v18.0/me/messages*": {
@@ -237,8 +239,8 @@ var instagramOutgoingTests = []OutgoingTestCase{
 		Label:           "Quick replies on a broadcast message",
 		MsgText:         "Are you happy?",
 		MsgURN:          "instagram:12345",
-		MsgOrigin:       courier.MsgOriginBroadcast,
-		MsgQuickReplies: []courier.QuickReply{{Text: "Yes"}, {Text: "No"}},
+		MsgOrigin:       models.MsgOriginBroadcast,
+		MsgQuickReplies: []models.QuickReply{{Text: "Yes"}, {Text: "No"}},
 		MockResponses: map[string][]*httpx.MockResponse{
 			"https://graph.facebook.com/v18.0/me/messages*": {
 				httpx.NewMockResponse(200, nil, []byte(`{"message_id": "mid.133"}`)),
@@ -254,7 +256,7 @@ var instagramOutgoingTests = []OutgoingTestCase{
 		Label:           "Message that exceeds max text length",
 		MsgText:         "This is a long message which spans more than one part, what will actually be sent in the end if we exceed the max length?",
 		MsgURN:          "instagram:12345",
-		MsgQuickReplies: []courier.QuickReply{{Text: "Yes"}, {Text: "No"}},
+		MsgQuickReplies: []models.QuickReply{{Text: "Yes"}, {Text: "No"}},
 		MockResponses: map[string][]*httpx.MockResponse{
 			"https://graph.facebook.com/v18.0/me/messages*": {
 				httpx.NewMockResponse(200, nil, []byte(`{"message_id": "mid.133"}`)),
@@ -293,7 +295,7 @@ var instagramOutgoingTests = []OutgoingTestCase{
 		MsgText:         "This is some text.",
 		MsgURN:          "instagram:12345",
 		MsgAttachments:  []string{"image/jpeg:https://foo.bar/image.jpg"},
-		MsgQuickReplies: []courier.QuickReply{{Text: "Yes"}, {Text: "No"}},
+		MsgQuickReplies: []models.QuickReply{{Text: "Yes"}, {Text: "No"}},
 		MockResponses: map[string][]*httpx.MockResponse{
 			"https://graph.facebook.com/v18.0/me/messages*": {
 				httpx.NewMockResponse(200, nil, []byte(`{"message_id": "mid.133"}`)),
@@ -392,7 +394,7 @@ func TestInstagramOutgoing(t *testing.T) {
 	// shorter max msg length for testing
 	maxMsgLength = 100
 
-	var channel = test.NewMockChannel("8eb23e93-5ecb-45ba-b726-3b064e0c56ab", "IG", "12345", "", []string{urns.Instagram.Prefix}, map[string]any{courier.ConfigAuthToken: "a123"})
+	var channel = test.NewMockChannel("8eb23e93-5ecb-45ba-b726-3b064e0c56ab", "IG", "12345", "", []string{urns.Instagram.Prefix}, map[string]any{models.ConfigAuthToken: "a123"})
 
 	checkRedacted := []string{"wac_admin_system_user_token", "missing_facebook_app_secret", "missing_facebook_webhook_secret", "a123"}
 
@@ -447,7 +449,7 @@ func TestInstagramDescribeURN(t *testing.T) {
 
 	channel := instgramTestChannels[0]
 	handler := newHandler("IG", "Instagram")
-	handler.Initialize(test.NewMockServer(courier.NewDefaultConfig(), test.NewMockBackend()))
+	handler.Initialize(test.NewMockServer(runtime.NewDefaultConfig(), test.NewMockBackend()))
 	clog := courier.NewChannelLog(courier.ChannelLogTypeUnknown, channel, handler.RedactValues(channel))
 
 	tcs := []struct {
@@ -468,9 +470,9 @@ func TestInstagramDescribeURN(t *testing.T) {
 
 func TestInstagramBuildAttachmentRequest(t *testing.T) {
 	mb := test.NewMockBackend()
-	s := courier.NewServer(courier.NewDefaultConfig(), mb)
+	s := courier.NewServer(runtime.NewDefaultConfig(), mb)
 
-	handler := &handler{NewBaseHandler(courier.ChannelType("IG"), "Instagram", DisableUUIDRouting())}
+	handler := &handler{NewBaseHandler(models.ChannelType("IG"), "Instagram", DisableUUIDRouting())}
 	handler.Initialize(s)
 	req, _ := handler.BuildAttachmentRequest(context.Background(), mb, facebookTestChannels[0], "https://example.org/v1/media/41", nil)
 	assert.Equal(t, "https://example.org/v1/media/41", req.URL.String())

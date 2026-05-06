@@ -11,6 +11,7 @@ import (
 
 	"github.com/buger/jsonparser"
 	"github.com/nyaruka/courier"
+	"github.com/nyaruka/courier/core/models"
 	"github.com/nyaruka/courier/handlers"
 	"github.com/nyaruka/gocommon/dates"
 	"github.com/nyaruka/gocommon/jsonx"
@@ -34,13 +35,13 @@ type handler struct {
 }
 
 func newHandler() courier.ChannelHandler {
-	return &handler{handlers.NewBaseHandler(courier.ChannelType("CM"), "Click Mobile")}
+	return &handler{handlers.NewBaseHandler(models.ChannelType("CM"), "Click Mobile")}
 }
 
 func (h *handler) Initialize(s courier.Server) error {
 	h.SetServer(s)
 	s.AddHandlerRoute(h, http.MethodGet, "receive", courier.ChannelLogTypeMsgReceive, h.receiveMessage)
-	s.AddHandlerRoute(h, http.MethodPost, "receive", courier.ChannelLogTypeMsgStatus, h.receiveMessage)
+	s.AddHandlerRoute(h, http.MethodPost, "receive", courier.ChannelLogTypeMsgReceive, h.receiveMessage)
 	return nil
 }
 
@@ -99,15 +100,15 @@ type mtPayload struct {
 }
 
 func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.SendResult, clog *courier.ChannelLog) error {
-	username := msg.Channel().StringConfigForKey(courier.ConfigUsername, "")
-	password := msg.Channel().StringConfigForKey(courier.ConfigPassword, "")
+	username := msg.Channel().StringConfigForKey(models.ConfigUsername, "")
+	password := msg.Channel().StringConfigForKey(models.ConfigPassword, "")
 	appID := msg.Channel().StringConfigForKey(configAppID, "")
 	orgID := msg.Channel().StringConfigForKey(configOrgID, "")
 	if username == "" || password == "" || appID == "" || orgID == "" {
 		return courier.ErrChannelConfig
 	}
 
-	cmSendURL := msg.Channel().StringConfigForKey(courier.ConfigSendURL, sendURL)
+	cmSendURL := msg.Channel().StringConfigForKey(models.ConfigSendURL, sendURL)
 
 	for _, part := range handlers.SplitMsgByChannel(msg.Channel(), handlers.GetTextAndAttachments(msg), maxMsgLength) {
 
@@ -124,7 +125,7 @@ func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.Sen
 			Timestamp:   timestamp,
 			AuthKey:     hash,
 			Operation:   "send",
-			Reference:   msg.ID().String(),
+			Reference:   string(msg.UUID()),
 			MessageType: "1",
 			From:        msg.Channel().Address(),
 			To:          msg.URN().Path(),

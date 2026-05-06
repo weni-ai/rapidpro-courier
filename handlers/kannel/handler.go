@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nyaruka/courier"
+	"github.com/nyaruka/courier/core/models"
 	"github.com/nyaruka/courier/handlers"
 	"github.com/nyaruka/gocommon/gsm7"
 	"github.com/nyaruka/gocommon/urns"
@@ -38,7 +39,7 @@ type handler struct {
 }
 
 func newHandler() courier.ChannelHandler {
-	return &handler{handlers.NewBaseHandler(courier.ChannelType("KN"), "Kannel")}
+	return &handler{handlers.NewBaseHandler(models.ChannelType("KN"), "Kannel")}
 }
 
 // Initialize is called by the engine once everything is loaded
@@ -81,17 +82,17 @@ func (h *handler) receiveMessage(ctx context.Context, channel courier.Channel, w
 	return handlers.WriteMsgsAndResponse(ctx, h, []courier.MsgIn{msg}, w, r, clog)
 }
 
-var statusMapping = map[int]courier.MsgStatus{
-	1:  courier.MsgStatusDelivered,
-	2:  courier.MsgStatusErrored,
-	4:  courier.MsgStatusSent,
-	8:  courier.MsgStatusSent,
-	16: courier.MsgStatusErrored,
+var statusMapping = map[int]models.MsgStatus{
+	1:  models.MsgStatusDelivered,
+	2:  models.MsgStatusErrored,
+	4:  models.MsgStatusSent,
+	8:  models.MsgStatusSent,
+	16: models.MsgStatusErrored,
 }
 
 type statusForm struct {
-	ID     courier.MsgID `validate:"required" name:"id"`
-	Status int           `validate:"required" name:"status"`
+	UUID   models.MsgUUID `name:"uuid"   validate:"uuid,required"`
+	Status int            `name:"status" validate:"required"`
 }
 
 // receiveStatus is our HTTP handler function for status updates
@@ -122,16 +123,16 @@ func (h *handler) receiveStatus(ctx context.Context, channel courier.Channel, w 
 
 func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.SendResult, clog *courier.ChannelLog) error {
 
-	username := msg.Channel().StringConfigForKey(courier.ConfigUsername, "")
-	password := msg.Channel().StringConfigForKey(courier.ConfigPassword, "")
-	sendURL := msg.Channel().StringConfigForKey(courier.ConfigSendURL, "")
+	username := msg.Channel().StringConfigForKey(models.ConfigUsername, "")
+	password := msg.Channel().StringConfigForKey(models.ConfigPassword, "")
+	sendURL := msg.Channel().StringConfigForKey(models.ConfigSendURL, "")
 	if username == "" || password == "" || sendURL == "" {
 		return courier.ErrChannelConfig
 	}
 	dlrMask := msg.Channel().StringConfigForKey(configDLRMask, defaultDLRMask)
 
 	callbackDomain := msg.Channel().CallbackDomain(h.Server().Config().Domain)
-	dlrURL := fmt.Sprintf("https://%s/c/kn/%s/status?id=%s&status=%%d", callbackDomain, msg.Channel().UUID(), msg.ID().String())
+	dlrURL := fmt.Sprintf("https://%s/c/kn/%s/status?uuid=%s&status=%%d", callbackDomain, msg.Channel().UUID(), msg.UUID())
 
 	// build our request
 	form := url.Values{
@@ -148,7 +149,7 @@ func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.Sen
 		form["priority"] = []string{"1"}
 	}
 
-	useNationalStr := msg.Channel().ConfigForKey(courier.ConfigUseNational, false)
+	useNationalStr := msg.Channel().ConfigForKey(models.ConfigUseNational, false)
 	useNational, _ := useNationalStr.(bool)
 
 	// if we are meant to use national formatting (no country code) pull that out

@@ -11,6 +11,7 @@ import (
 
 	"github.com/buger/jsonparser"
 	"github.com/nyaruka/courier"
+	"github.com/nyaruka/courier/core/models"
 	"github.com/nyaruka/courier/handlers"
 	"github.com/nyaruka/gocommon/httpx"
 	"github.com/nyaruka/gocommon/urns"
@@ -33,7 +34,7 @@ type handler struct {
 }
 
 func newHandler() courier.ChannelHandler {
-	return &handler{handlers.NewBaseHandler(courier.ChannelType("TQ"), "ThinQ")}
+	return &handler{handlers.NewBaseHandler(models.ChannelType("TQ"), "ThinQ")}
 }
 
 // Initialize is called by the engine once everything is loaded
@@ -50,9 +51,9 @@ func (h *handler) Initialize(s courier.Server) error {
 // type: sms|mms
 // message: Content of the message
 type moForm struct {
-	From    string `validate:"required" name:"from"`
-	To      string `validate:"required" name:"to"`
-	Type    string `validate:"required" name:"type"`
+	From    string `name:"from"    validate:"required"`
+	To      string `name:"to"      validate:"required"`
+	Type    string `name:"type"    validate:"required"`
 	Message string `name:"message"`
 }
 
@@ -96,17 +97,17 @@ func (h *handler) receiveMessage(ctx context.Context, channel courier.Channel, w
 // status: System version of the status (i.e.: DELIVRD)
 // error: Error code if any (i.e.: 000)
 type statusForm struct {
-	GUID   string `validate:"required" name:"guid"`
-	Status string `validate:"required" name:"status"`
+	GUID   string `name:"guid"   validate:"required"`
+	Status string `name:"status" validate:"required"`
 }
 
-var statusMapping = map[string]courier.MsgStatus{
-	"DELIVRD": courier.MsgStatusDelivered,
-	"EXPIRED": courier.MsgStatusErrored,
-	"DELETED": courier.MsgStatusFailed,
-	"UNDELIV": courier.MsgStatusFailed,
-	"UNKNOWN": courier.MsgStatusFailed,
-	"REJECTD": courier.MsgStatusFailed,
+var statusMapping = map[string]models.MsgStatus{
+	"DELIVRD": models.MsgStatusDelivered,
+	"EXPIRED": models.MsgStatusErrored,
+	"DELETED": models.MsgStatusFailed,
+	"UNDELIV": models.MsgStatusFailed,
+	"UNKNOWN": models.MsgStatusFailed,
+	"REJECTD": models.MsgStatusFailed,
 }
 
 // receiveStatus is our HTTP handler function for status updates

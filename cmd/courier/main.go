@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/getsentry/sentry-go"
-	_ "github.com/lib/pq"
 	"github.com/nyaruka/courier"
 	slogmulti "github.com/samber/slog-multi"
 	slogsentry "github.com/samber/slog-sentry/v2"
@@ -25,7 +24,6 @@ import (
 	_ "github.com/nyaruka/courier/handlers/clicksend"
 	_ "github.com/nyaruka/courier/handlers/dart"
 	_ "github.com/nyaruka/courier/handlers/dialog360"
-	_ "github.com/nyaruka/courier/handlers/discord"
 	_ "github.com/nyaruka/courier/handlers/dmark"
 	_ "github.com/nyaruka/courier/handlers/external"
 	_ "github.com/nyaruka/courier/handlers/facebook_legacy"
@@ -55,7 +53,6 @@ import (
 	_ "github.com/nyaruka/courier/handlers/novo"
 	_ "github.com/nyaruka/courier/handlers/playmobile"
 	_ "github.com/nyaruka/courier/handlers/plivo"
-	_ "github.com/nyaruka/courier/handlers/redrabbit"
 	_ "github.com/nyaruka/courier/handlers/rocketchat"
 	_ "github.com/nyaruka/courier/handlers/shaqodoon"
 	_ "github.com/nyaruka/courier/handlers/slack"
@@ -65,6 +62,7 @@ import (
 	_ "github.com/nyaruka/courier/handlers/telesom"
 	_ "github.com/nyaruka/courier/handlers/test"
 	_ "github.com/nyaruka/courier/handlers/thinq"
+	_ "github.com/nyaruka/courier/handlers/turn"
 	_ "github.com/nyaruka/courier/handlers/twiml"
 	_ "github.com/nyaruka/courier/handlers/viber"
 	_ "github.com/nyaruka/courier/handlers/vk"
@@ -74,8 +72,10 @@ import (
 	_ "github.com/nyaruka/courier/handlers/whatsapp_legacy"
 	_ "github.com/nyaruka/courier/handlers/yo"
 	_ "github.com/nyaruka/courier/handlers/zenvia"
+	"github.com/nyaruka/courier/runtime"
 
 	// load available backends
+	"github.com/nyaruka/courier/backends/rapidpro"
 	_ "github.com/nyaruka/courier/backends/rapidpro"
 )
 
@@ -86,18 +86,18 @@ var (
 )
 
 func main() {
-	config := courier.LoadConfig()
-	config.Version = version
+	cfg := runtime.LoadConfig()
+	cfg.Version = version
 
 	// configure our logger
-	logHandler := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: config.LogLevel})
+	logHandler := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel})
 	slog.SetDefault(slog.New(logHandler))
 
 	// if we have a DSN entry, try to initialize it
-	if config.SentryDSN != "" {
-		err := sentry.Init(sentry.ClientOptions{Dsn: config.SentryDSN, ServerName: config.InstanceID, Release: version, AttachStacktrace: true})
+	if cfg.SentryDSN != "" {
+		err := sentry.Init(sentry.ClientOptions{Dsn: cfg.SentryDSN, ServerName: cfg.InstanceID, Release: version, AttachStacktrace: true})
 		if err != nil {
-			slog.Error("error initiating sentry client", "error", err, "dsn", config.SentryDSN)
+			slog.Error("error initiating sentry client", "error", err, "dsn", cfg.SentryDSN)
 			os.Exit(1)
 		}
 
@@ -114,16 +114,16 @@ func main() {
 	log := slog.With("comp", "main")
 	log.Info("starting courier", "version", version, "released", date)
 
-	// load our backend
-	backend, err := courier.NewBackend(config)
+	rt, err := runtime.NewRuntime(cfg)
 	if err != nil {
-		log.Error("error creating backend", "error", err)
+		slog.Error("error creating runtime", "error", err)
 		os.Exit(1)
 	}
 
-	server := courier.NewServer(config, backend)
-	err = server.Start()
-	if err != nil {
+	backend := rapidpro.NewBackend(rt)
+
+	server := courier.NewServer(cfg, backend)
+	if err := server.Start(); err != nil {
 		log.Error("unable to start server", "error", err)
 		os.Exit(1)
 	}

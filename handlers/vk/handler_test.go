@@ -14,7 +14,9 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/nyaruka/courier"
+	"github.com/nyaruka/courier/core/models"
 	. "github.com/nyaruka/courier/handlers"
+	"github.com/nyaruka/courier/runtime"
 	"github.com/nyaruka/courier/test"
 )
 
@@ -31,8 +33,8 @@ var testChannels = []courier.Channel{
 		"",
 		[]string{urns.VK.Prefix},
 		map[string]any{
-			courier.ConfigAuthToken:        "token123xyz",
-			courier.ConfigSecret:           "abc123xyz",
+			models.ConfigAuthToken:         "token123xyz",
+			models.ConfigSecret:            "abc123xyz",
 			configServerVerificationString: "a1b2c3",
 		}),
 }
@@ -372,7 +374,7 @@ func TestDescribeURN(t *testing.T) {
 	defer func() { apiBaseURL = realAPIUrl }()
 
 	handler := newHandler()
-	handler.Initialize(test.NewMockServer(courier.NewDefaultConfig(), test.NewMockBackend()))
+	handler.Initialize(test.NewMockServer(runtime.NewDefaultConfig(), test.NewMockBackend()))
 	clog := courier.NewChannelLog(courier.ChannelLogTypeUnknown, testChannels[0], handler.RedactValues(testChannels[0]))
 	urn, _ := urns.New(urns.VK, "123456789")
 	data := map[string]string{"name": "John Doe"}
@@ -396,7 +398,7 @@ var outgoingCases = []OutgoingTestCase{
 		},
 		ExpectedRequests: []ExpectedRequest{
 			{
-				Params: url.Values{"access_token": {"token123xyz"}, "attachment": {""}, "message": {"Simple message"}, "random_id": {"10"}, "user_id": {"123456789"}, "v": {"5.103"}},
+				Params: url.Values{"access_token": {"token123xyz"}, "attachment": {""}, "message": {"Simple message"}, "random_id": {"0191e180-7d60-7000-aded-7d8b151cbd5b"}, "user_id": {"123456789"}, "v": {"5.103"}},
 			},
 		},
 		ExpectedExtIDs: []string{"1"},
@@ -433,7 +435,7 @@ var outgoingCases = []OutgoingTestCase{
 				Params: url.Values{"access_token": {"token123xyz"}, "hash": {"zxc987qwe"}, "photo": {"..."}, "server": {"109876"}, "v": {"5.103"}},
 			},
 			{
-				Params: url.Values{"access_token": {"token123xyz"}, "attachment": {"photo1901234_1"}, "message": {""}, "random_id": {"10"}, "user_id": {"123456789"}, "v": {"5.103"}},
+				Params: url.Values{"access_token": {"token123xyz"}, "attachment": {"photo1901234_1"}, "message": {""}, "random_id": {"0191e180-7d60-7000-aded-7d8b151cbd5b"}, "user_id": {"123456789"}, "v": {"5.103"}},
 			},
 		},
 		ExpectedExtIDs: []string{"1"},
@@ -465,7 +467,7 @@ var outgoingCases = []OutgoingTestCase{
 				Params: url.Values{"access_token": {"token123xyz"}, "hash": {"zxc987qwe"}, "photo": {"..."}, "server": {"109876"}, "v": {"5.103"}},
 			},
 			{
-				Params: url.Values{"access_token": {"token123xyz"}, "attachment": {"photo1901234_1"}, "message": {"Attachments\n\nhttps://foo.bar/audio.mp3"}, "random_id": {"10"}, "user_id": {"123456789"}, "v": {"5.103"}},
+				Params: url.Values{"access_token": {"token123xyz"}, "attachment": {"photo1901234_1"}, "message": {"Attachments\n\nhttps://foo.bar/audio.mp3"}, "random_id": {"0191e180-7d60-7000-aded-7d8b151cbd5b"}, "user_id": {"123456789"}, "v": {"5.103"}},
 			},
 		},
 	},
@@ -473,7 +475,7 @@ var outgoingCases = []OutgoingTestCase{
 		Label:           "Send keyboard",
 		MsgText:         "Send keyboard",
 		MsgURN:          "vk:123456789",
-		MsgQuickReplies: []courier.QuickReply{{Text: "A"}, {Text: "B"}, {Text: "C"}, {Text: "D"}, {Text: "E"}},
+		MsgQuickReplies: []models.QuickReply{{Text: "A"}, {Text: "B"}, {Text: "C"}, {Text: "D"}, {Text: "E"}},
 		MockResponses: map[string][]*httpx.MockResponse{
 			"https://api.vk.com/method/messages.send.json?*": {
 				httpx.NewMockResponse(200, nil, []byte(`{"response": 1}`)),
@@ -481,7 +483,7 @@ var outgoingCases = []OutgoingTestCase{
 		},
 		ExpectedRequests: []ExpectedRequest{
 			{
-				Params: url.Values{"access_token": {"token123xyz"}, "attachment": {""}, "keyboard": {keyboardJson}, "message": {"Send keyboard"}, "random_id": {"10"}, "user_id": {"123456789"}, "v": {"5.103"}},
+				Params: url.Values{"access_token": {"token123xyz"}, "attachment": {""}, "keyboard": {keyboardJson}, "message": {"Send keyboard"}, "random_id": {"0191e180-7d60-7000-aded-7d8b151cbd5b"}, "user_id": {"123456789"}, "v": {"5.103"}},
 			},
 		},
 		ExpectedExtIDs: []string{"1"},
@@ -497,7 +499,7 @@ var outgoingCases = []OutgoingTestCase{
 		},
 		ExpectedRequests: []ExpectedRequest{
 			{
-				Params: url.Values{"access_token": {"token123xyz"}, "attachment": {""}, "message": {"Simple message"}, "random_id": {"10"}, "user_id": {"123456789"}, "v": {"5.103"}},
+				Params: url.Values{"access_token": {"token123xyz"}, "attachment": {""}, "message": {"Simple message"}, "random_id": {"0191e180-7d60-7000-aded-7d8b151cbd5b"}, "user_id": {"123456789"}, "v": {"5.103"}},
 			},
 		},
 		ExpectedError: courier.ErrConnectionFailed,
@@ -513,7 +515,7 @@ var outgoingCases = []OutgoingTestCase{
 		},
 		ExpectedRequests: []ExpectedRequest{
 			{
-				Params: url.Values{"access_token": {"token123xyz"}, "attachment": {""}, "message": {"Simple message"}, "random_id": {"10"}, "user_id": {"123456789"}, "v": {"5.103"}},
+				Params: url.Values{"access_token": {"token123xyz"}, "attachment": {""}, "message": {"Simple message"}, "random_id": {"0191e180-7d60-7000-aded-7d8b151cbd5b"}, "user_id": {"123456789"}, "v": {"5.103"}},
 			},
 		},
 		ExpectedError: courier.ErrResponseContent,

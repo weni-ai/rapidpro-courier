@@ -19,6 +19,8 @@ import (
 	"github.com/getsentry/sentry-go"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/nyaruka/courier/core/models"
+	"github.com/nyaruka/courier/runtime"
 	"github.com/nyaruka/courier/utils"
 	"github.com/nyaruka/courier/utils/clogs"
 	"github.com/nyaruka/gocommon/httpx"
@@ -36,7 +38,7 @@ const (
 // Server is the main interface ChannelHandlers use to interact with backends. It provides an
 // abstraction that makes mocking easier for isolated unit tests
 type Server interface {
-	Config() *Config
+	Config() *runtime.Config
 
 	AddHandlerRoute(handler ChannelHandler, method string, action string, logType clogs.Type, handlerFunc ChannelHandleFunc)
 	GetHandler(Channel) ChannelHandler
@@ -55,7 +57,7 @@ type Server interface {
 
 // NewServer creates a new Server for the passed in configuration. The server will have to be started
 // afterwards, which is when configuration options are checked.
-func NewServer(config *Config, backend Backend) Server {
+func NewServer(config *runtime.Config, backend Backend) Server {
 	// create our top level router
 	logger := slog.Default()
 	return NewServerWithLogger(config, backend, logger)
@@ -63,7 +65,7 @@ func NewServer(config *Config, backend Backend) Server {
 
 // NewServerWithLogger creates a new Server for the passed in configuration. The server will have to be started
 // afterwards, which is when configuration options are checked.
-func NewServerWithLogger(config *Config, backend Backend, logger *slog.Logger) Server {
+func NewServerWithLogger(config *runtime.Config, backend Backend, logger *slog.Logger) Server {
 	router := chi.NewRouter()
 	router.Use(middleware.Compress(flate.DefaultCompression))
 	router.Use(middleware.StripSlashes)
@@ -106,6 +108,9 @@ func (s *server) Start() error {
 	s.router.MethodNotAllowed(s.handle405)
 	s.router.Get("/", s.handleIndex)
 	s.router.Get("/status", s.basicAuthRequired(s.handleStatus))
+	s.router.Post("/ci/attachment/fetch", s.tokenAuthRequired(s.handleFetchAttachment))
+
+	// deprecated - kept for backwards compatibility
 	s.publicRouter.Post("/_fetch-attachment", s.tokenAuthRequired(s.handleFetchAttachment)) // becomes /c/_fetch-attachment
 
 	// initialize our handlers
@@ -163,16 +168,13 @@ func (s *server) Stop() error {
 	close(s.stopChan)
 
 	// stop our backend
-	err := s.backend.Stop()
-	if err != nil {
+	if err := s.backend.Stop(); err != nil {
 		return err
 	}
 
 	// wait for everything to stop
 	s.waitGroup.Wait()
 
-	// clean things up, tearing down any connections
-	s.backend.Cleanup()
 	log.Info("server stopped", "state", "stopped")
 	return nil
 }
@@ -181,7 +183,7 @@ func (s *server) GetHandler(ch Channel) ChannelHandler { return activeHandlers[c
 
 func (s *server) WaitGroup() *sync.WaitGroup { return s.waitGroup }
 func (s *server) StopChan() chan bool        { return s.stopChan }
-func (s *server) Config() *Config            { return s.config }
+func (s *server) Config() *runtime.Config    { return s.config }
 func (s *server) Stopped() bool              { return s.stopped }
 
 func (s *server) Backend() Backend   { return s.backend }
@@ -196,7 +198,7 @@ type server struct {
 
 	foreman *Foreman
 
-	config *Config
+	config *runtime.Config
 
 	waitGroup *sync.WaitGroup
 	stopChan  chan bool
@@ -251,7 +253,7 @@ func (s *server) channelHandleWrapper(handler ChannelHandler, handlerFunc Channe
 			return
 		}
 
-		var channelUUID ChannelUUID
+		var channelUUID models.ChannelUUID
 		if channel != nil {
 			channelUUID = channel.UUID()
 		}
@@ -273,13 +275,13 @@ func (s *server) channelHandleWrapper(handler ChannelHandler, handlerFunc Channe
 
 		// if we received an error, write it out and report it
 		if hErr != nil {
-			slog.Error("error handling request", "error", err, "channel_uuid", channelUUID, "request", recorder.Trace.RequestTrace)
+			slog.Error("error handling request", "error", hErr, "channel", channelUUID, "url", recorder.Trace.Request.URL.String())
 			writeAndLogRequestError(ctx, handler, recorder.ResponseWriter, r, channel, hErr)
 		}
 
 		// end recording of the request so that we have a response trace
 		if err := recorder.End(); err != nil {
-			slog.Error("error recording request", "error", err, "channel_uuid", channelUUID, "request", recorder.Trace.RequestTrace)
+			slog.Error("error recording request", "error", err, "channel", channelUUID)
 			writeAndLogRequestError(ctx, handler, w, r, channel, err)
 		}
 

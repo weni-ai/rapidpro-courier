@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/nyaruka/courier"
+	"github.com/nyaruka/courier/core/models"
 	"github.com/nyaruka/courier/handlers"
 	"github.com/nyaruka/courier/test"
 	"github.com/nyaruka/gocommon/urns"
@@ -19,7 +20,7 @@ func TestSplitMsg(t *testing.T) {
 		expectedParts []handlers.MsgPart
 	}{
 		{
-			msg:  test.NewMockMsg(1001, "b6454f25-e5b9-4795-a180-b9e35ca3a523", channel, "tel+1234567890", "This is a message longer than 10", nil),
+			msg:  test.NewMockMsg("b6454f25-e5b9-4795-a180-b9e35ca3a523", channel, "tel+1234567890", "This is a message longer than 10", nil),
 			opts: handlers.SplitOptions{MaxTextLen: 20},
 			expectedParts: []handlers.MsgPart{
 				{Type: handlers.MsgPartTypeText, Text: "This is a message", IsFirst: true},
@@ -27,7 +28,7 @@ func TestSplitMsg(t *testing.T) {
 			},
 		},
 		{
-			msg:  test.NewMockMsg(1001, "b6454f25-e5b9-4795-a180-b9e35ca3a523", channel, "tel+1234567890", "Lovely image", []string{"image/jpeg:http://test.jpg"}),
+			msg:  test.NewMockMsg("b6454f25-e5b9-4795-a180-b9e35ca3a523", channel, "tel+1234567890", "Lovely image", []string{"image/jpeg:http://test.jpg"}),
 			opts: handlers.SplitOptions{MaxTextLen: 20},
 			expectedParts: []handlers.MsgPart{
 				{Type: handlers.MsgPartTypeAttachment, Attachment: "image/jpeg:http://test.jpg", IsFirst: true},
@@ -35,7 +36,7 @@ func TestSplitMsg(t *testing.T) {
 			},
 		},
 		{
-			msg:  test.NewMockMsg(1001, "b6454f25-e5b9-4795-a180-b9e35ca3a523", channel, "tel+1234567890", "Lovely image", []string{"image/jpeg:http://test.jpg"}),
+			msg:  test.NewMockMsg("b6454f25-e5b9-4795-a180-b9e35ca3a523", channel, "tel+1234567890", "Lovely image", []string{"image/jpeg:http://test.jpg"}),
 			opts: handlers.SplitOptions{MaxTextLen: 20, Captionable: []handlers.MediaType{handlers.MediaTypeImage}},
 			expectedParts: []handlers.MsgPart{
 				{Type: handlers.MsgPartTypeCaptionedAttachment, Text: "Lovely image", Attachment: "image/jpeg:http://test.jpg", IsFirst: true, IsLast: true},
@@ -53,14 +54,14 @@ func TestSplitMsg(t *testing.T) {
 func TestSplitMsgByChannel(t *testing.T) {
 	var channelWithMaxLength = test.NewMockChannel("8eb23e93-5ecb-45ba-b726-3b064e0c56ab", "AC", "2020", "US", []string{urns.Phone.Prefix},
 		map[string]any{
-			courier.ConfigUsername:  "user1",
-			courier.ConfigPassword:  "pass1",
-			courier.ConfigMaxLength: 25,
+			models.ConfigUsername:  "user1",
+			models.ConfigPassword:  "pass1",
+			models.ConfigMaxLength: 25,
 		})
 	var channelWithoutMaxLength = test.NewMockChannel("8eb23e93-5ecb-45ba-b726-3b064e0c56ab", "AC", "2020", "US", []string{urns.Phone.Prefix},
 		map[string]any{
-			courier.ConfigUsername: "user1",
-			courier.ConfigPassword: "pass1",
+			models.ConfigUsername: "user1",
+			models.ConfigPassword: "pass1",
 		})
 
 	assert.Equal(t, []string{""}, handlers.SplitMsgByChannel(channelWithoutMaxLength, "", 160))
