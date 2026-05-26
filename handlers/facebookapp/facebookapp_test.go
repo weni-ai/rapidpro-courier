@@ -412,7 +412,7 @@ func addValidSignature(r *http.Request) {
 }
 
 func addValidSignatureWAC(r *http.Request) {
-	body, _ := handlers.ReadBody(r, 100000)
+	body, _ := ReadBody(r, 100000)
 	sig, _ := fbCalculateSignature("wac_app_secret", body)
 	r.Header.Set(signatureHeader, fmt.Sprintf("sha1=%s", string(sig)))
 }

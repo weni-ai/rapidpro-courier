@@ -119,7 +119,7 @@ func main() {
 		logrus.Fatalf("Error starting server: %s", err)
 	}
 
-	ch := make(chan os.Signal)
+	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
 	logrus.WithField("comp", "main").WithField("signal", <-ch).Info("stopping")
 
