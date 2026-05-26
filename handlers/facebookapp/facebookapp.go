@@ -331,17 +331,33 @@ func (h *handler) GetChannel(ctx context.Context, r *http.Request) (courier.Chan
 
 // receiveVerify handles Facebook's webhook verification callback
 func (h *handler) receiveVerify(ctx context.Context, channel courier.Channel, w http.ResponseWriter, r *http.Request, clog *courier.ChannelLog) ([]courier.Event, error) {
+	isWAC := h.ChannelType() == "WAC"
+
+	expectedSecret := h.Server().Config().FacebookWebhookSecret
+	if isWAC {
+		expectedSecret = h.Server().Config().WhatsappCloudWebhookSecret
+	}
+
+	// WAC uses HTTP 400 on verification errors; FBA/IG keep the legacy 200 response.
+	writeVerifyError := func(err error) error {
+		courier.LogRequestError(r, channel, err)
+		if isWAC {
+			return courier.WriteError(w, http.StatusBadRequest, err)
+		}
+		return h.WriteRequestError(ctx, w, err)
+	}
+
 	mode := r.URL.Query().Get("hub.mode")
 
 	// this isn't a subscribe verification, that's an error
 	if mode != "subscribe" {
-		return nil, handlers.WriteAndLogRequestError(ctx, h, channel, w, r, fmt.Errorf("unknown request"))
+		return nil, writeVerifyError(fmt.Errorf("unknown request"))
 	}
 
-	// verify the token against our server facebook webhook secret, if the same return the challenge FB sent us
+	// verify the token against the channel-specific webhook secret; if it matches, return the challenge
 	secret := r.URL.Query().Get("hub.verify_token")
-	if secret != h.Server().Config().FacebookWebhookSecret {
-		return nil, handlers.WriteAndLogRequestError(ctx, h, channel, w, r, fmt.Errorf("token does not match secret"))
+	if secret != expectedSecret {
+		return nil, writeVerifyError(fmt.Errorf("token does not match secret"))
 	}
 	// and respond with the challenge token
 	_, err := fmt.Fprint(w, r.URL.Query().Get("hub.challenge"))
