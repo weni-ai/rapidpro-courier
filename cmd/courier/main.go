@@ -37,6 +37,7 @@ import (
 	_ "github.com/nyaruka/courier/handlers/jasmin"
 	_ "github.com/nyaruka/courier/handlers/jiochat"
 	_ "github.com/nyaruka/courier/handlers/junebug"
+	_ "github.com/nyaruka/courier/handlers/justcall"
 	_ "github.com/nyaruka/courier/handlers/kaleyra"
 	_ "github.com/nyaruka/courier/handlers/kannel"
 	_ "github.com/nyaruka/courier/handlers/line"
@@ -118,7 +119,7 @@ func main() {
 		logrus.Fatalf("Error starting server: %s", err)
 	}
 
-	ch := make(chan os.Signal)
+	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
 	logrus.WithField("comp", "main").WithField("signal", <-ch).Info("stopping")
 

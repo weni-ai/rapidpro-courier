@@ -16,7 +16,6 @@ import (
 	"github.com/nyaruka/courier/handlers"
 	"github.com/nyaruka/courier/utils"
 	"github.com/nyaruka/gocommon/urns"
-	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 )
 
@@ -68,6 +67,26 @@ type AuthCache struct {
 // JwtTokenValidator is the default implementation of TokenValidator.
 type JwtTokenValidator struct {
 	AuthCache
+}
+
+// teamsServiceURLPrefix is the in-path marker that separates the conversation
+// id from the bot service URL inside the teams URN path.
+const teamsServiceURLPrefix = ":serviceURL:"
+
+// newTeamsURN builds a teams URN without going through gocommon's broken
+// regex validation (which rejects valid Microsoft Teams conversation IDs).
+func newTeamsURN(identifier string) urns.URN {
+	return urns.URN(urns.TeamsScheme + ":" + identifier)
+}
+
+// teamsServiceURL extracts the bot service URL from a teams URN. Replaces
+// urn.TeamsServiceURL() which splits by ":" and returns the wrong segment.
+func teamsServiceURL(urn urns.URN) string {
+	parts := strings.SplitN(urn.Path(), teamsServiceURLPrefix, 2)
+	if len(parts) < 2 {
+		return ""
+	}
+	return parts[1]
 }
 
 // IsExpired checks if the Keys have expired.
@@ -151,7 +170,7 @@ func validateToken(channel courier.Channel, w http.ResponseWriter, r *http.Reque
 	return nil
 }
 
-func (h *handler) receiveEvent(ctx context.Context, channel courier.Channel, w http.ResponseWriter, r *http.Request) ([]courier.Event, error) {
+func (h *handler) receiveEvent(ctx context.Context, channel courier.Channel, w http.ResponseWriter, r *http.Request, clog *courier.ChannelLog) ([]courier.Event, error) {
 	payload := &Activity{}
 	err := handlers.DecodeAndValidateJSON(payload, r)
 	if err != nil {
@@ -180,10 +199,7 @@ func (h *handler) receiveEvent(ctx context.Context, channel courier.Channel, w h
 	if payload.Type == "message" {
 		sender := payload.Conversation.ID
 
-		urn, err = urns.NewTeamsURN(sender + ":serviceURL:" + serviceURL)
-		if err != nil {
-			return nil, handlers.WriteAndLogRequestError(ctx, h, channel, w, r, err)
-		}
+		urn = newTeamsURN(sender + teamsServiceURLPrefix + serviceURL)
 
 		text := payload.Text
 		attachmentURLs := make([]string, 0, 2)
@@ -194,7 +210,7 @@ func (h *handler) receiveEvent(ctx context.Context, channel courier.Channel, w h
 			}
 		}
 
-		ev := h.Backend().NewIncomingMsg(channel, urn, text).WithExternalID(payload.Id).WithReceivedOn(date)
+		ev := h.Backend().NewIncomingMsg(channel, urn, text, clog).WithExternalID(payload.Id).WithReceivedOn(date)
 		event := h.Backend().CheckExternalIDSeen(ev)
 
 		// add any attachment URL found
@@ -202,7 +218,7 @@ func (h *handler) receiveEvent(ctx context.Context, channel courier.Channel, w h
 			event.WithAttachment(attURL)
 		}
 
-		err := h.Backend().WriteMsg(ctx, event)
+		err := h.Backend().WriteMsg(ctx, event, clog)
 		if err != nil {
 			return nil, err
 		}
@@ -255,24 +271,21 @@ func (h *handler) receiveEvent(ctx context.Context, channel courier.Channel, w h
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+token)
 
-		rr, err := utils.MakeHTTPRequest(req)
-		if err != nil {
+		resp, respBody, err := handlers.RequestHTTP(req, clog)
+		if err != nil || resp.StatusCode/100 != 2 {
 			return nil, err
 		}
 
 		var body ConversationAccount
 
-		err = json.Unmarshal(rr.Body, &body)
+		err = json.Unmarshal(respBody, &body)
 		if err != nil {
 			return nil, err
 		}
 
-		urn, err = urns.NewTeamsURN(body.ID + ":serviceURL:" + serviceURL)
-		if err != nil {
-			return nil, handlers.WriteAndLogRequestError(ctx, h, channel, w, r, err)
-		}
+		urn = newTeamsURN(body.ID + teamsServiceURLPrefix + serviceURL)
 
-		event := h.Backend().NewChannelEvent(channel, courier.NewConversation, urn).WithOccurredOn(date)
+		event := h.Backend().NewChannelEvent(channel, courier.NewConversation, urn, clog).WithOccurredOn(date)
 		events = append(events, event)
 		data = append(data, courier.NewEventReceiveData(event))
 	}
@@ -281,7 +294,7 @@ func (h *handler) receiveEvent(ctx context.Context, channel courier.Channel, w h
 		data = append(data, courier.NewInfoData("ignoring messageReaction"))
 	}
 
-	return events, courier.WriteDataResponse(ctx, w, http.StatusOK, "Events Handled", data)
+	return events, courier.WriteDataResponse(w, http.StatusOK, "Events Handled", data)
 }
 
 type mtPayload struct {
@@ -339,21 +352,21 @@ type Activity struct {
 	Timestamp    string              `json:"timestamp,omitempty"`
 }
 
-func (h *handler) SendMsg(ctx context.Context, msg courier.Msg) (courier.MsgStatus, error) {
+func (h *handler) Send(ctx context.Context, msg courier.Msg, clog *courier.ChannelLog) (courier.MsgStatus, error) {
 
 	token := msg.Channel().StringConfigForKey(courier.ConfigAuthToken, "")
 	if token == "" {
 		return nil, fmt.Errorf("missing token for TM channel")
 	}
 
-	status := h.Backend().NewMsgStatusForID(msg.Channel(), msg.ID(), courier.MsgErrored)
+	status := h.Backend().NewMsgStatusForID(msg.Channel(), msg.ID(), courier.MsgErrored, clog)
 
 	payload := Activity{}
 
 	path := strings.Split(msg.URN().Path(), ":")
 	conversationID := path[1]
 
-	msgURL := msg.URN().TeamsServiceURL() + "v3/conversations/a:" + conversationID + "/activities"
+	msgURL := teamsServiceURL(msg.URN()) + "v3/conversations/a:" + conversationID + "/activities"
 
 	for _, attachment := range msg.Attachments() {
 		attType, attURL := handlers.SplitAttachment(attachment)
@@ -382,25 +395,19 @@ func (h *handler) SendMsg(ctx context.Context, msg courier.Msg) (courier.MsgStat
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
 
-	rr, err := utils.MakeHTTPRequest(req)
-
-	// record our status and log
-	log := courier.NewChannelLogFromRR("Message Sent", msg.Channel(), msg.ID(), rr).WithError("Message Send Error", err)
-	status.AddLog(log)
-	if err != nil {
-		return status, err
-	}
-	status.SetStatus(courier.MsgWired)
-	externalID, err := jsonparser.GetString(rr.Body, "id")
-	if err != nil {
-		log.WithError("Message Send Error", errors.Errorf("unable to get message_id from body"))
+	resp, respBody, err := handlers.RequestHTTP(req, clog)
+	if err != nil || resp.StatusCode/100 != 2 {
 		return status, nil
 	}
-	status.SetExternalID(externalID)
+	status.SetStatus(courier.MsgWired)
+	externalID, err := jsonparser.GetString(respBody, "id")
+	if err == nil {
+		status.SetExternalID(externalID)
+	}
 	return status, nil
 }
 
-func (h *handler) DescribeURN(ctx context.Context, channel courier.Channel, urn urns.URN) (map[string]string, error) {
+func (h *handler) DescribeURN(ctx context.Context, channel courier.Channel, urn urns.URN, clog *courier.ChannelLog) (map[string]string, error) {
 
 	accessToken := channel.StringConfigForKey(courier.ConfigAuthToken, "")
 	if accessToken == "" {
@@ -410,18 +417,18 @@ func (h *handler) DescribeURN(ctx context.Context, channel courier.Channel, urn 
 	// build a request to lookup the stats for this contact
 	pathSplit := strings.Split(urn.Path(), ":")
 	conversationID := pathSplit[1]
-	url := urn.TeamsServiceURL() + "v3/conversations/a:" + conversationID + "/members"
+	url := teamsServiceURL(urn) + "v3/conversations/a:" + conversationID + "/members"
 
 	req, _ := http.NewRequest(http.MethodGet, url, nil)
 	req.Header.Set("Authorization", "Bearer "+accessToken)
-	rr, err := utils.MakeHTTPRequest(req)
-	if err != nil {
-		return nil, fmt.Errorf("unable to look up contact data:%s\n%s", err, rr.Response)
+	resp, respBody, err := handlers.RequestHTTP(req, clog)
+	if err != nil || resp.StatusCode/100 != 2 {
+		return nil, fmt.Errorf("unable to look up contact data: %s", err)
 	}
 
 	// read our first and last name
-	givenName, _ := jsonparser.GetString(rr.Body, "[0]", "givenName")
-	surname, _ := jsonparser.GetString(rr.Body, "[0]", "surname")
+	givenName, _ := jsonparser.GetString(respBody, "[0]", "givenName")
+	surname, _ := jsonparser.GetString(respBody, "[0]", "surname")
 
 	return map[string]string{"name": utils.JoinNonEmpty(" ", givenName, surname)}, nil
 }

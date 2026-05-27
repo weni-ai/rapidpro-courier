@@ -37,10 +37,13 @@ func SendWebhooks(channel courier.Channel, r *http.Request, configWebhook interf
 		req.Header.Set(name, value.(string))
 	}
 
-	resp, err := utils.MakeHTTPRequest(req)
+	resp, err := utils.GetHTTPClient().Do(req)
+	if err != nil {
+		return err
+	}
 
 	if resp.StatusCode/100 != 2 {
-		return err
+		return fmt.Errorf("non-2xx response status: %d", resp.StatusCode)
 	}
 
 	return nil
