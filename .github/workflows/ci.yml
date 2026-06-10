@@ -24,23 +24,10 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install Redis
-        uses: zhulik/redis-action@v1.0.0
-        with:
-          redis version: ${{ env.redis-version }}
-
-      - name: Install PostgreSQL
-        uses: harmon758/postgresql-action@v1
-        with:
-          postgresql version: ${{ env.pg-version }}
-          postgresql db: courier_test
-          postgresql user: courier
-          postgresql password: courier
+        uses: actions/checkout@v3
 
       - name: Install Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v3
         with:
           go-version: ${{ env.go-version }}
 
@@ -61,12 +48,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
         with:
           fetch-depth: 0
 
       - name: Install Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v3
         with:
           go-version: ${{ env.go-version }}
 
