@@ -12,11 +12,12 @@ import (
 	"time"
 
 	"github.com/buger/jsonparser"
+	"github.com/gabriel-vasile/mimetype"
 	"github.com/gomodule/redigo/redis"
 	"github.com/nyaruka/courier"
+	"github.com/nyaruka/courier/backends/rapidpro"
 	"github.com/nyaruka/courier/handlers"
 	"github.com/nyaruka/courier/utils"
-	"github.com/nyaruka/gocommon/httpx"
 	"github.com/nyaruka/gocommon/urns"
 	"github.com/nyaruka/redisx"
 	"github.com/patrickmn/go-cache"
@@ -65,7 +66,7 @@ func newWAHandler(channelType courier.ChannelType, name string) courier.ChannelH
 // Initialize is called by the engine once everything is loaded
 func (h *handler) Initialize(s courier.Server) error {
 	h.SetServer(s)
-	s.AddHandlerRoute(h, http.MethodPost, "receive", h.receiveEvent)
+	s.AddHandlerRoute(h, http.MethodPost, "receive", courier.ChannelLogTypeMultiReceive, handlers.JSONPayload(h, h.receiveEvents))
 	return nil
 }
 
@@ -86,7 +87,7 @@ func (h *handler) Initialize(s courier.Server) error {
 //	    "type": "text"
 //	  }]
 //	}
-type eventPayload struct {
+type eventsPayload struct {
 	Contacts []struct {
 		Profile struct {
 			Name string `json:"name"`
@@ -169,26 +170,47 @@ type eventPayload struct {
 		} `json:"contacts"`
 	} `json:"messages"`
 	Statuses []struct {
-		ID          string `json:"id"           validate:"required"`
-		RecipientID string `json:"recipient_id" validate:"required"`
-		Timestamp   string `json:"timestamp"    validate:"required"`
-		Status      string `json:"status"       validate:"required"`
+		ID        string `json:"id"           validate:"required"`
+		Timestamp string `json:"timestamp"    validate:"required"`
+		Status    string `json:"status"       validate:"required"`
 	} `json:"statuses"`
 }
 
-// receiveMessage is our HTTP handler function for incoming messages
-func (h *handler) receiveEvent(ctx context.Context, channel courier.Channel, w http.ResponseWriter, r *http.Request, clog *courier.ChannelLog) ([]courier.Event, error) {
-	payload := &eventPayload{}
-	err := handlers.DecodeAndValidateJSON(payload, r)
-	if err != nil {
-		return nil, handlers.WriteAndLogRequestError(ctx, h, channel, w, r, err)
+// checkBlockedContact is a function to verify if the contact from msg has status blocked to return an error or not if it is active
+func checkBlockedContact(payload *eventsPayload, ctx context.Context, channel courier.Channel, h *handler, clog *courier.ChannelLog) error {
+	if len(payload.Contacts) > 0 {
+		if contactURN, err := urns.NewWhatsAppURN(payload.Contacts[0].WaID); err == nil {
+			if contact, err := h.Backend().GetContact(ctx, channel, contactURN, channel.StringConfigForKey(courier.ConfigAuthToken, ""), payload.Contacts[0].Profile.Name, clog); err == nil {
+				c, err := json.Marshal(contact)
+				if err != nil {
+					return err
+				}
+				var dbc rapidpro.DBContact
+				if err = json.Unmarshal(c, &dbc); err != nil {
+					return err
+				}
+				if dbc.Status_ == "B" {
+					return errors.New("blocked contact sending message")
+				}
+			}
+		}
 	}
+	return nil
+}
 
-	// the list of events we deal with
+// receiveEvents is our HTTP handler function for incoming messages and status updates
+func (h *handler) receiveEvents(ctx context.Context, channel courier.Channel, w http.ResponseWriter, r *http.Request, payload *eventsPayload, clog *courier.ChannelLog) ([]courier.Event, error) {
 	events := make([]courier.Event, 0, 2)
 
 	// the list of data we will return in our response
 	data := make([]interface{}, 0, 2)
+
+	seenMsgIDs := make(map[string]bool, 2)
+
+	err := checkBlockedContact(payload, ctx, channel, h, clog)
+	if err != nil {
+		return nil, err
+	}
 
 	var contactNames = make(map[string]string)
 	for _, contact := range payload.Contacts {
@@ -197,6 +219,10 @@ func (h *handler) receiveEvent(ctx context.Context, channel courier.Channel, w h
 
 	// first deal with any received messages
 	for _, msg := range payload.Messages {
+		if seenMsgIDs[msg.ID] {
+			continue
+		}
+
 		// create our date from the timestamp
 		ts, err := strconv.ParseInt(msg.Timestamp, 10, 64)
 		if err != nil {
@@ -253,8 +279,7 @@ func (h *handler) receiveEvent(ctx context.Context, channel courier.Channel, w h
 		}
 
 		// create our message
-		ev := h.Backend().NewIncomingMsg(channel, urn, text, clog).WithReceivedOn(date).WithExternalID(msg.ID).WithContactName(contactNames[msg.From])
-		event := h.Backend().CheckExternalIDSeen(ev)
+		event := h.Backend().NewIncomingMsg(channel, urn, text, msg.ID, clog).WithReceivedOn(date).WithContactName(contactNames[msg.From])
 
 		// we had an error downloading media
 		if err != nil {
@@ -270,10 +295,9 @@ func (h *handler) receiveEvent(ctx context.Context, channel courier.Channel, w h
 			return nil, err
 		}
 
-		h.Backend().WriteExternalIDSeen(event)
-
 		events = append(events, event)
 		data = append(data, courier.NewMsgReceiveData(event))
+		seenMsgIDs[msg.ID] = true
 	}
 
 	// now with any status updates
@@ -303,6 +327,14 @@ func (h *handler) receiveEvent(ctx context.Context, channel courier.Channel, w h
 
 		events = append(events, event)
 		data = append(data, courier.NewStatusData(event))
+	}
+
+	webhook := channel.ConfigForKey("webhook", nil)
+	if webhook != nil {
+		er := handlers.SendWebhooks(channel, r, webhook, clog)
+		if er != nil {
+			courier.LogRequestError(r, channel, fmt.Errorf("could not send webhook: %s", er))
+		}
 	}
 
 	return events, courier.WriteDataResponse(w, http.StatusOK, "Events Handled", data)
@@ -445,13 +477,16 @@ type LocalizableParam struct {
 }
 
 type Param struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Type     string       `json:"type"`
+	Text     string       `json:"text,omitempty"`
+	Image    *mediaObject `json:"image,omitempty"`
+	Document *mediaObject `json:"document,omitempty"`
+	Video    *mediaObject `json:"video,omitempty"`
 }
 
 type Component struct {
 	Type       string  `json:"type"`
-	Parameters []Param `json:"parameters"`
+	Parameters []Param `json:"parameters,omitempty"`
 }
 
 type templatePayload struct {
@@ -588,19 +623,27 @@ func buildPayloads(msg courier.Msg, h *handler, clog *courier.ChannelLog) ([]int
 	parts := handlers.SplitMsgByChannel(msg.Channel(), msg.Text(), maxMsgLength)
 
 	qrs := msg.QuickReplies()
+	langCode := getSupportedLanguage(msg.Locale())
 	wppVersion := msg.Channel().ConfigForKey("version", "0").(string)
 	isInteractiveMsgCompatible := semver.Compare(wppVersion, interactiveMsgMinSupVersion)
 	isInteractiveMsg := (isInteractiveMsgCompatible >= 0) && (len(qrs) > 0)
 
 	textAsCaption := false
 
-	if len(msg.Attachments()) > 0 {
+	// do we have a template?
+	var templating *MsgTemplating
+	templating, err = h.getTemplating(msg)
+	if err != nil {
+		return nil, errors.Wrapf(err, "unable to decode template: %s for channel: %s", string(msg.Metadata()), msg.Channel().UUID())
+	}
+
+	if len(msg.Attachments()) > 0 && templating == nil {
 		for attachmentCount, attachment := range msg.Attachments() {
 
 			mimeType, mediaURL := handlers.SplitAttachment(attachment)
 			mediaID, err := h.fetchMediaID(msg, mimeType, mediaURL, clog)
 			if err != nil {
-				logrus.WithField("channel_uuid", msg.Channel().UUID().String()).WithError(err).Error("error while uploading media to whatsapp")
+				logrus.WithField("channel_uuid", msg.Channel().UUID()).WithError(err).Error("error while uploading media to whatsapp")
 			}
 			fileURL := mediaURL
 			if err == nil && mediaID != "" {
@@ -627,7 +670,7 @@ func buildPayloads(msg courier.Msg, h *handler, clog *courier.ChannelLog) ([]int
 
 				// Logging error
 				if err != nil {
-					logrus.WithField("channel_uuid", msg.Channel().UUID().String()).WithError(err).Error("Error while parsing the media URL")
+					logrus.WithField("channel_uuid", msg.Channel().UUID()).WithError(err).Error("Error while parsing the media URL")
 				}
 				payload.Document = mediaPayload
 				payloads = append(payloads, payload)
@@ -734,12 +777,6 @@ func buildPayloads(msg courier.Msg, h *handler, clog *courier.ChannelLog) ([]int
 		}
 
 	} else {
-		// do we have a template?
-		var templating *MsgTemplating
-		templating, err := h.getTemplate(msg)
-		if err != nil {
-			return nil, errors.Wrapf(err, "unable to decode template: %s for channel: %s", string(msg.Metadata()), msg.Channel().UUID())
-		}
 		if templating != nil {
 			namespace := templating.Namespace
 			if namespace == "" {
@@ -757,7 +794,7 @@ func buildPayloads(msg courier.Msg, h *handler, clog *courier.ChannelLog) ([]int
 				payload.HSM.Namespace = namespace
 				payload.HSM.ElementName = templating.Template.Name
 				payload.HSM.Language.Policy = "deterministic"
-				payload.HSM.Language.Code = templating.Language
+				payload.HSM.Language.Code = langCode
 				for _, v := range templating.Variables {
 					payload.HSM.LocalizableParams = append(payload.HSM.LocalizableParams, LocalizableParam{Default: v})
 				}
@@ -771,7 +808,7 @@ func buildPayloads(msg courier.Msg, h *handler, clog *courier.ChannelLog) ([]int
 				payload.Template.Namespace = namespace
 				payload.Template.Name = templating.Template.Name
 				payload.Template.Language.Policy = "deterministic"
-				payload.Template.Language.Code = templating.Language
+				payload.Template.Language.Code = langCode
 
 				component := &Component{Type: "body"}
 
@@ -779,6 +816,40 @@ func buildPayloads(msg courier.Msg, h *handler, clog *courier.ChannelLog) ([]int
 					component.Parameters = append(component.Parameters, Param{Type: "text", Text: v})
 				}
 				payload.Template.Components = append(payload.Template.Components, *component)
+
+				if len(msg.Attachments()) > 0 {
+
+					header := &Component{Type: "header"}
+
+					mimeType, mediaURL := handlers.SplitAttachment(msg.Attachments()[0])
+					mediaID, err := h.fetchMediaID(msg, mimeType, mediaURL, clog)
+					if err != nil {
+						logrus.WithField("channel_uuid", msg.Channel().UUID()).WithError(err).Error("error while uploading media to whatsapp")
+					}
+					if err == nil && mediaID != "" {
+						mediaURL = ""
+					}
+					mimeType = strings.Split(mimeType, "/")[0]
+					if mimeType == "application" {
+						mimeType = "document"
+					}
+
+					media := mediaObject{ID: mediaID, Link: mediaURL}
+					if mimeType == "image" {
+						header.Parameters = append(header.Parameters, Param{Type: "image", Image: &media})
+					} else if mimeType == "video" {
+						header.Parameters = append(header.Parameters, Param{Type: "video", Video: &media})
+					} else if mimeType == "document" {
+						media.Filename, err = utils.BasePathForURL(mediaURL)
+						if err != nil {
+							return nil, err
+						}
+						header.Parameters = append(header.Parameters, Param{Type: "document", Document: &media})
+					} else {
+						return nil, fmt.Errorf("unknown attachment mime type: %s", mimeType)
+					}
+					payload.Template.Components = append(payload.Template.Components, *header)
+				}
 
 				payloads = append(payloads, payload)
 			}
@@ -810,21 +881,41 @@ func buildPayloads(msg courier.Msg, h *handler, clog *courier.ChannelLog) ([]int
 									Type: "reply",
 								}
 								btns[i].Reply.ID = fmt.Sprint(i)
-								btns[i].Reply.Title = qr
+								var text string
+								if strings.Contains(qr, "\\/") {
+									text = strings.Replace(qr, "\\", "", -1)
+								} else if strings.Contains(qr, "\\\\") {
+									text = strings.Replace(qr, "\\\\", "\\", -1)
+								} else {
+									text = qr
+								}
+								btns[i].Reply.Title = text
 							}
 							payload.Interactive.Action.Buttons = btns
 							payloads = append(payloads, payload)
 						} else {
 							payload.Interactive.Type = "list"
 							payload.Interactive.Body.Text = part
-							payload.Interactive.Action.Button = "Menu"
+							if msg.Locale() != "" {
+								payload.Interactive.Action.Button = langCode
+							} else {
+								payload.Interactive.Action.Button = "Menu"
+							}
 							section := mtSection{
 								Rows: make([]mtSectionRow, len(qrs)),
 							}
 							for i, qr := range qrs {
+								var text string
+								if strings.Contains(qr, "\\/") {
+									text = strings.Replace(qr, "\\", "", -1)
+								} else if strings.Contains(qr, "\\\\") {
+									text = strings.Replace(qr, "\\\\", "\\", -1)
+								} else {
+									text = qr
+								}
 								section.Rows[i] = mtSectionRow{
 									ID:    fmt.Sprint(i),
-									Title: qr,
+									Title: text,
 								}
 							}
 							payload.Interactive.Action.Sections = []mtSection{
@@ -866,7 +957,7 @@ func (h *handler) fetchMediaID(msg courier.Msg, mimeType, mediaURL string, clog 
 	rc := h.Backend().RedisPool().Get()
 	defer rc.Close()
 
-	cacheKey := fmt.Sprintf(mediaCacheKeyPattern, msg.Channel().UUID().String())
+	cacheKey := fmt.Sprintf(mediaCacheKeyPattern, msg.Channel().UUID())
 	mediaCache := redisx.NewIntervalHash(cacheKey, time.Hour*24, 2)
 	mediaID, err := mediaCache.Get(rc, mediaURL)
 	if err != nil {
@@ -876,7 +967,7 @@ func (h *handler) fetchMediaID(msg courier.Msg, mimeType, mediaURL string, clog 
 	}
 
 	// check in failure cache
-	failKey := fmt.Sprintf("%s-%s", msg.Channel().UUID().String(), mediaURL)
+	failKey := fmt.Sprintf("%s-%s", msg.Channel().UUID(), mediaURL)
 	found, _ := failedMediaCache.Get(failKey)
 
 	// any non nil value means we cached a failure, don't try again until our cache expires
@@ -909,9 +1000,14 @@ func (h *handler) fetchMediaID(msg courier.Msg, mimeType, mediaURL string, clog 
 		return "", errors.Wrapf(err, "error building request to media endpoint")
 	}
 	setWhatsAppAuthHeader(&req.Header, msg.Channel())
-	mediaType, _ := httpx.DetectContentType(respBody)
-	req.Header.Add("Content-Type", mediaType)
+	mtype := http.DetectContentType(respBody)
 
+	if mtype != mimeType || mtype == "application/octet-stream" || mtype == "application/zip" {
+		mimeT := mimetype.Detect(respBody)
+		req.Header.Add("Content-Type", mimeT.String())
+	} else {
+		req.Header.Add("Content-Type", mtype)
+	}
 	resp, respBody, err = handlers.RequestHTTP(req, clog)
 	if err != nil || resp.StatusCode/100 != 2 {
 		failedMediaCache.Set(failKey, true, cache.DefaultExpiration)
@@ -948,7 +1044,7 @@ func sendWhatsAppMsg(rc redis.Conn, msg courier.Msg, sendPath *url.URL, payload 
 	}
 
 	if resp != nil && (resp.StatusCode == 429 || resp.StatusCode == 503) {
-		rateLimitKey := fmt.Sprintf("rate_limit:%s", msg.Channel().UUID().String())
+		rateLimitKey := fmt.Sprintf("rate_limit:%s", msg.Channel().UUID())
 		rc.Do("SET", rateLimitKey, "engaged")
 
 		// The rate limit is 50 requests per second
@@ -965,7 +1061,7 @@ func sendWhatsAppMsg(rc redis.Conn, msg courier.Msg, sendPath *url.URL, payload 
 	// handle send msg errors
 	if err == nil && len(errPayload.Errors) > 0 {
 		if hasTiersError(*errPayload) {
-			rateLimitBulkKey := fmt.Sprintf("rate_limit_bulk:%s", msg.Channel().UUID().String())
+			rateLimitBulkKey := fmt.Sprintf("rate_limit_bulk:%s", msg.Channel().UUID())
 			rc.Do("SET", rateLimitBulkKey, "engaged")
 
 			// The WA tiers spam rate limit hit
@@ -1141,43 +1237,27 @@ func checkWhatsAppContact(channel courier.Channel, baseURL string, urn urns.URN,
 	}
 }
 
-func (h *handler) getTemplate(msg courier.Msg) (*MsgTemplating, error) {
-	mdJSON := msg.Metadata()
-	if len(mdJSON) == 0 {
+func (h *handler) getTemplating(msg courier.Msg) (*MsgTemplating, error) {
+	if len(msg.Metadata()) == 0 {
 		return nil, nil
 	}
-	metadata := &TemplateMetadata{}
-	err := json.Unmarshal(mdJSON, metadata)
-	if err != nil {
+
+	metadata := &struct {
+		Templating *MsgTemplating `json:"templating"`
+	}{}
+	if err := json.Unmarshal(msg.Metadata(), metadata); err != nil {
 		return nil, err
 	}
-	templating := metadata.Templating
-	if templating == nil {
+
+	if metadata.Templating == nil {
 		return nil, nil
 	}
 
-	// check our template is valid
-	err = utils.Validate(templating)
-	if err != nil {
+	if err := utils.Validate(metadata.Templating); err != nil {
 		return nil, errors.Wrapf(err, "invalid templating definition")
 	}
-	// check country
-	if templating.Country != "" {
-		templating.Language = fmt.Sprintf("%s_%s", templating.Language, templating.Country)
-	}
 
-	// map our language from iso639-3_iso3166-2 to the WA country / iso638-2 pair
-	language, found := languageMap[templating.Language]
-	if !found {
-		return nil, fmt.Errorf("unable to find mapping for language: %s", templating.Language)
-	}
-	templating.Language = language
-
-	return templating, err
-}
-
-type TemplateMetadata struct {
-	Templating *MsgTemplating `json:"templating"`
+	return metadata.Templating, nil
 }
 
 type MsgTemplating struct {
@@ -1185,14 +1265,28 @@ type MsgTemplating struct {
 		Name string `json:"name" validate:"required"`
 		UUID string `json:"uuid" validate:"required"`
 	} `json:"template" validate:"required,dive"`
-	Language  string   `json:"language" validate:"required"`
-	Country   string   `json:"country"`
 	Namespace string   `json:"namespace"`
 	Variables []string `json:"variables"`
 }
 
-// mapping from iso639-3_iso3166-2 to WA language code
-var languageMap = map[string]string{
+func getSupportedLanguage(lc courier.Locale) string {
+	// look for exact match
+	if lang := supportedLanguages[lc]; lang != "" {
+		return lang
+	}
+
+	// if we have a country, strip that off and look again for a match
+	l, c := lc.ToParts()
+	if c != "" {
+		if lang := supportedLanguages[courier.Locale(l)]; lang != "" {
+			return lang
+		}
+	}
+	return "en" // fallback to English
+}
+
+// Mapping from engine locales to supported languages, see https://developers.facebook.com/docs/whatsapp/api/messages/message-templates/
+var supportedLanguages = map[courier.Locale]string{
 	"afr":    "af",    // Afrikaans
 	"sqi":    "sq",    // Albanian
 	"ara":    "ar",    // Arabic
@@ -1201,16 +1295,16 @@ var languageMap = map[string]string{
 	"bul":    "bg",    // Bulgarian
 	"cat":    "ca",    // Catalan
 	"zho":    "zh_CN", // Chinese
-	"zho_CN": "zh_CN", // Chinese (CHN)
-	"zho_HK": "zh_HK", // Chinese (HKG)
-	"zho_TW": "zh_TW", // Chinese (TAI)
+	"zho-CN": "zh_CN", // Chinese (CHN)
+	"zho-HK": "zh_HK", // Chinese (HKG)
+	"zho-TW": "zh_TW", // Chinese (TAI)
 	"hrv":    "hr",    // Croatian
 	"ces":    "cs",    // Czech
 	"dah":    "da",    // Danish
 	"nld":    "nl",    // Dutch
 	"eng":    "en",    // English
-	"eng_GB": "en_GB", // English (UK)
-	"eng_US": "en_US", // English (US)
+	"eng-GB": "en_GB", // English (UK)
+	"eng-US": "en_US", // English (US)
 	"est":    "et",    // Estonian
 	"fil":    "fil",   // Filipino
 	"fin":    "fi",    // Finnish
@@ -1243,8 +1337,8 @@ var languageMap = map[string]string{
 	"fas":    "fa",    // Persian
 	"pol":    "pl",    // Polish
 	"por":    "pt_PT", // Portuguese
-	"por_BR": "pt_BR", // Portuguese (BR)
-	"por_PT": "pt_PT", // Portuguese (POR)
+	"por-BR": "pt_BR", // Portuguese (BR)
+	"por-PT": "pt_PT", // Portuguese (POR)
 	"pan":    "pa",    // Punjabi
 	"ron":    "ro",    // Romanian
 	"rus":    "ru",    // Russian
@@ -1252,9 +1346,9 @@ var languageMap = map[string]string{
 	"slk":    "sk",    // Slovak
 	"slv":    "sl",    // Slovenian
 	"spa":    "es",    // Spanish
-	"spa_AR": "es_AR", // Spanish (ARG)
-	"spa_ES": "es_ES", // Spanish (SPA)
-	"spa_MX": "es_MX", // Spanish (MEX)
+	"spa-AR": "es_AR", // Spanish (ARG)
+	"spa-ES": "es_ES", // Spanish (SPA)
+	"spa-MX": "es_MX", // Spanish (MEX)
 	"swa":    "sw",    // Swahili
 	"swe":    "sv",    // Swedish
 	"tam":    "ta",    // Tamil

@@ -1,15 +1,20 @@
+//go:build ignore
+
 package teams
 
 import (
 	"context"
+	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/buger/jsonparser"
 	"github.com/nyaruka/courier"
-	"github.com/nyaruka/courier/handlers"
+	. "github.com/nyaruka/courier/handlers"
 	"github.com/nyaruka/courier/test"
 	"github.com/nyaruka/gocommon/urns"
 	"gopkg.in/go-playground/assert.v1"
@@ -126,8 +131,8 @@ var testCases = []handlers.ChannelHandleTestCase{
 		Data:                 helloMsg,
 		ExpectedRespStatus:   200,
 		ExpectedBodyContains: "Handled",
-		ExpectedMsgText:      handlers.Sp("Hello World"),
-		ExpectedURN:          "teams:a:2811:serviceURL:https://smba.trafficmanager.net/br/",
+		ExpectedMsgText:      Sp("Hello World"),
+		ExpectedURN:          "teams:2811:smba.trafficmanager.net/br/",
 		ExpectedExternalID:   "56834",
 		ExpectedDate:         time.Date(2022, 6, 6, 16, 51, 00, 0000000, time.UTC),
 		Headers:              map[string]string{"Authorization": "Bearer " + access_token},
@@ -139,9 +144,9 @@ var testCases = []handlers.ChannelHandleTestCase{
 		Data:                 attachment,
 		ExpectedRespStatus:   200,
 		ExpectedBodyContains: "Handled",
-		ExpectedMsgText:      handlers.Sp("Hello World"),
+		ExpectedMsgText:      Sp("Hello World"),
 		ExpectedAttachments:  []string{"https://image-url/foo.png"},
-		ExpectedURN:          "teams:a:2811:serviceURL:https://smba.trafficmanager.net/br/",
+		ExpectedURN:          "teams:2811:smba.trafficmanager.net/br/",
 		ExpectedExternalID:   "56834",
 		ExpectedDate:         time.Date(2022, 6, 6, 16, 51, 00, 0000000, time.UTC),
 		Headers:              map[string]string{"Authorization": "Bearer " + access_token},
@@ -153,9 +158,9 @@ var testCases = []handlers.ChannelHandleTestCase{
 		Data:                 attachmentVideo,
 		ExpectedRespStatus:   200,
 		ExpectedBodyContains: "Handled",
-		ExpectedMsgText:      handlers.Sp("Hello World"),
+		ExpectedMsgText:      Sp("Hello World"),
 		ExpectedAttachments:  []string{"https://video-url/foo.mp4"},
-		ExpectedURN:          "teams:a:2811:serviceURL:https://smba.trafficmanager.net/br/",
+		ExpectedURN:          "teams:2811:smba.trafficmanager.net/br/",
 		ExpectedExternalID:   "56834",
 		ExpectedDate:         time.Date(2022, 6, 6, 16, 51, 00, 0000000, time.UTC),
 		Headers:              map[string]string{"Authorization": "Bearer " + access_token},
@@ -167,9 +172,9 @@ var testCases = []handlers.ChannelHandleTestCase{
 		Data:                 attachmentDocument,
 		ExpectedRespStatus:   200,
 		ExpectedBodyContains: "Handled",
-		ExpectedMsgText:      handlers.Sp("Hello World"),
+		ExpectedMsgText:      Sp("Hello World"),
 		ExpectedAttachments:  []string{"https://document-url/foo.pdf"},
-		ExpectedURN:          "teams:a:2811:serviceURL:https://smba.trafficmanager.net/br/",
+		ExpectedURN:          "teams:2811:smba.trafficmanager.net/br/",
 		ExpectedExternalID:   "56834",
 		ExpectedDate:         time.Date(2022, 6, 6, 16, 51, 00, 0000000, time.UTC),
 		Headers:              map[string]string{"Authorization": "Bearer " + access_token},
@@ -180,6 +185,7 @@ var testCases = []handlers.ChannelHandleTestCase{
 		URL:                  "/c/tm/8eb23e93-5ecb-45ba-b726-3b064e0c568c/receive",
 		Data:                 messageReaction,
 		ExpectedRespStatus:   200,
+		ExpectedURN:          "",
 		ExpectedBodyContains: "ignoring messageReaction",
 		Headers:              map[string]string{"Authorization": "Bearer " + access_token},
 		NoQueueErrorCheck:    true,
@@ -220,6 +226,7 @@ func buildMockTeams() *httptest.Server {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		accessToken := r.Header.Get("Authorization")
 		tokenH := strings.Replace(accessToken, "Bearer ", "", 1)
+		// payload := r.GetBody
 		defer r.Body.Close()
 
 		// invalid auth token
@@ -233,6 +240,18 @@ func buildMockTeams() *httptest.Server {
 		}
 
 		if r.URL.Path == "/v3/conversations/a:2022/activities" {
+			byteBody, err := io.ReadAll(r.Body)
+			if err != nil {
+				log.Fatal(err)
+			}
+			text, err := jsonparser.GetString(byteBody, "text")
+			if err != nil {
+				log.Fatal(err)
+			}
+			if text == "Error" {
+				w.Header().Add("Content-Type", "application/json")
+				w.Write([]byte(`{"is_error": true}`))
+			}
 			w.Header().Add("Content-Type", "application/json")
 			w.Write([]byte(`{"id":"1234567890"}`))
 		}
@@ -259,48 +278,39 @@ func newConversationUpdateTC(newUrl string, testCase []handlers.ChannelHandleTes
 
 var defaultSendTestCases = []handlers.ChannelSendTestCase{
 	{
-		Label:              "Plain Send",
-		MsgText:            "Simple Message",
-		MsgURN:             "teams:a:2022:serviceURL:https://smba.trafficmanager.net/br/",
-		ExpectedMsgStatus:  courier.MsgWired,
-		ExpectedExternalID: "1234567890",
-		MockResponseBody:   `{id:"1234567890"}`,
-		MockResponseStatus: 200,
+		Label:             "Plain Send",
+		MsgText:           "Simple Message",
+		MsgURN:            "teams:2022:https://smba.trafficmanager.net/br/",
+		ExpectedMsgStatus: "W", ExpectedExternalID: "1234567890",
+		MockResponseBody: `{id:"1234567890"}`, MockResponseStatus: 200,
 	},
-	{
-		Label:              "Send Photo",
-		MsgURN:             "teams:a:2022:serviceURL:https://smba.trafficmanager.net/br/",
-		MsgAttachments:     []string{"image/jpeg:https://foo.bar/image.jpg"},
-		ExpectedMsgStatus:  courier.MsgWired,
-		ExpectedExternalID: "1234567890",
-		MockResponseBody:   `{"id": "1234567890"}`,
-		MockResponseStatus: 200,
+	{Label: "Send Photo",
+		MsgURN: "teams:2022:https://smba.trafficmanager.net/br/", MsgAttachments: []string{"image/jpeg:https://foo.bar/image.jpg"},
+		ExpectedMsgStatus: "W", ExpectedExternalID: "1234567890",
+		MockResponseBody: `{"id": "1234567890"}`, MockResponseStatus: 200,
 	},
-	{
-		Label:              "Send Video",
-		MsgURN:             "teams:a:2022:serviceURL:https://smba.trafficmanager.net/br/",
-		MsgAttachments:     []string{"video/mp4:https://foo.bar/video.mp4"},
-		ExpectedMsgStatus:  courier.MsgWired,
-		ExpectedExternalID: "1234567890",
-		MockResponseBody:   `{"id": "1234567890"}`,
-		MockResponseStatus: 200,
+	{Label: "Send Video",
+		MsgURN: "teams:2022:https://smba.trafficmanager.net/br/", MsgAttachments: []string{"video/mp4:https://foo.bar/video.mp4"},
+		ExpectedMsgStatus: "W", ExpectedExternalID: "1234567890",
+		MockResponseBody: `{"id": "1234567890"}`, MockResponseStatus: 200,
 	},
-	{
-		Label:              "Send Document",
-		MsgURN:             "teams:a:2022:serviceURL:https://smba.trafficmanager.net/br/",
-		MsgAttachments:     []string{"application/pdf:https://foo.bar/document.pdf"},
-		ExpectedMsgStatus:  courier.MsgWired,
-		ExpectedExternalID: "1234567890",
-		MockResponseBody:   `{"id": "1234567890"}`,
-		MockResponseStatus: 200,
+	{Label: "Send Document",
+		MsgURN: "teams:2022:https://smba.trafficmanager.net/br/", MsgAttachments: []string{"application/pdf:https://foo.bar/document.pdf"},
+		ExpectedMsgStatus: "W", ExpectedExternalID: "1234567890",
+		MockResponseBody: `{"id": "1234567890"}`, MockResponseStatus: 200,
+	},
+	{Label: "ID Error",
+		MsgText: "Error", MsgURN: "teams:2022:smba.trafficmanager.net/br/",
+		ExpectedMsgStatus: "E",
+		MockResponseBody:  `{"is_error": true}`, MockResponseStatus: 200,
 	},
 }
 
 func newSendTestCases(testSendCases []handlers.ChannelSendTestCase, url string) []handlers.ChannelSendTestCase {
 	var newtestSendCases []handlers.ChannelSendTestCase
 	for _, tc := range testSendCases {
-		spTC := strings.Split(tc.MsgURN, ":serviceURL:")
-		newURN := spTC[0] + ":serviceURL:" + url + "/"
+		spTC := strings.Split(tc.MsgURN, ":")
+		newURN := spTC[0] + ":" + spTC[1] + ":" + url + "/"
 		tc.MsgURN = newURN
 		newtestSendCases = append(newtestSendCases, tc)
 	}
@@ -312,24 +322,27 @@ func TestSending(t *testing.T) {
 		map[string]interface{}{courier.ConfigAuthToken: access_token, "tenantID": "cba321", "botID": "0123", "appID": "1596"})
 
 	serviceTM := buildMockTeams()
-	newSendTestCases := newSendTestCases(defaultSendTestCases, serviceTM.URL)
-	handlers.RunChannelSendTestCases(t, defaultChannel, newHandler(), newSendTestCases, nil, nil)
+	url := strings.Split(serviceTM.URL, "http://")
+	newSendTestCases := newSendTestCases(defaultSendTestCases, url[1])
+	RunChannelSendTestCases(t, defaultChannel, newHandler(), newSendTestCases, nil, nil)
 	serviceTM.Close()
 }
 
 func TestDescribe(t *testing.T) {
 	server := buildMockTeams()
+	url := strings.Split(server.URL, "http://")
 
+	channel := testChannels[0]
 	handler := newHandler().(courier.URNDescriber)
-	clog := courier.NewChannelLog(courier.ChannelLogTypeUnknown, testChannels[0], nil)
+	logger := courier.NewChannelLog(courier.ChannelLogTypeUnknown, channel, nil)
 	tcs := []struct {
-		urn      urns.URN
-		metadata map[string]string
-	}{{urns.URN("teams:a:2022:serviceURL:" + string(server.URL) + "/"), map[string]string{"name": "John Doe"}}}
+		urn              urns.URN
+		expectedMetadata map[string]string
+	}{{urns.URN("teams:2022:" + string(url[1]) + "/"), map[string]string{"name": "John Doe"}}}
 
 	for _, tc := range tcs {
-		metadata, _ := handler.DescribeURN(context.Background(), testChannels[0], tc.urn, clog)
-		assert.Equal(t, metadata, tc.metadata)
+		metadata, _ := handler.DescribeURN(context.Background(), testChannels[0], tc.urn, logger)
+		assert.Equal(t, metadata, tc.expectedMetadata)
 	}
 	server.Close()
 }

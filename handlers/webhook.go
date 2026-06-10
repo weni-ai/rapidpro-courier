@@ -7,9 +7,11 @@ import (
 
 	"github.com/nyaruka/courier"
 	"github.com/nyaruka/courier/utils"
+	"github.com/nyaruka/gocommon/httpx"
+	"github.com/pkg/errors"
 )
 
-func SendWebhooks(channel courier.Channel, r *http.Request, configWebhook interface{}) error {
+func SendWebhooks(channel courier.Channel, r *http.Request, configWebhook interface{}, clog *courier.ChannelLog) error {
 	webhook, ok := configWebhook.(map[string]interface{})
 	if !ok {
 		return fmt.Errorf("conversion error")
@@ -37,13 +39,12 @@ func SendWebhooks(channel courier.Channel, r *http.Request, configWebhook interf
 		req.Header.Set(name, value.(string))
 	}
 
-	resp, err := utils.GetHTTPClient().Do(req)
-	if err != nil {
-		return err
+	trace, err := httpx.DoTrace(utils.GetHTTPClient(), req, nil, nil, 1024)
+	if trace != nil {
+		clog.HTTP(trace)
 	}
-
-	if resp.StatusCode/100 != 2 {
-		return fmt.Errorf("non-2xx response status: %d", resp.StatusCode)
+	if err != nil || trace.Response.StatusCode/100 != 2 {
+		return errors.Wrap(err, "status other than 200")
 	}
 
 	return nil

@@ -1,3 +1,27 @@
+1.5.6-courier-7.5.66
+----------
+  * Add support for sending templates with media in WA
+
+1.5.5-courier-7.5.66
+----------
+  * Use failure status to avoid message retry
+
+1.5.4-courier-7.5.66
+----------
+  * Remove errored status for kannel channel
+
+1.5.3-courier-7.5.66
+----------
+  * Update to v7.5.66
+
+1.5.3-courier-7.5.64
+----------
+  * Temporarily remove fault status for kannel channels
+
+1.5.2-courier-7.5.64
+----------
+  * Update to v7.5.64
+
 1.5.3-courier-7.4.0
 ----------
   * Add omitempty in WAC text fields
