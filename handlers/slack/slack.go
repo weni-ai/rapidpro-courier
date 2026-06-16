@@ -46,7 +46,7 @@ func newHandler() courier.ChannelHandler {
 
 func (h *handler) Initialize(s courier.Server) error {
 	h.SetServer(s)
-	s.AddHandlerRoute(h, http.MethodPost, "receive", h.receiveEvent)
+	s.AddHandlerRoute(h, http.MethodPost, "receive", courier.ChannelLogTypeUnknown, handlers.JSONPayload(h, h.receiveEvent))
 	return nil
 }
 
@@ -62,19 +62,16 @@ func handleURLVerification(ctx context.Context, channel courier.Channel, w http.
 	return nil, nil
 }
 
-func (h *handler) receiveEvent(ctx context.Context, channel courier.Channel, w http.ResponseWriter, r *http.Request, clog *courier.ChannelLog) ([]courier.Event, error) {
-	payload := &moPayload{}
-	err := handlers.DecodeAndValidateJSON(payload, r)
-	if err != nil {
-		return nil, handlers.WriteAndLogRequestError(ctx, h, channel, w, r, err)
-	}
-
+func (h *handler) receiveEvent(ctx context.Context, channel courier.Channel, w http.ResponseWriter, r *http.Request, payload *moPayload, clog *courier.ChannelLog) ([]courier.Event, error) {
 	if payload.Type == "url_verification" {
+		clog.SetType(courier.ChannelLogTypeWebhookVerify)
+
 		return handleURLVerification(ctx, channel, w, r, payload)
 	}
 
 	// if event is not a message or is from the bot ignore it
 	if payload.Event.Type == "message" && payload.Event.BotID == "" && payload.Event.ChannelType == "im" {
+		clog.SetType(courier.ChannelLogTypeMsgReceive)
 
 		date := time.Unix(int64(payload.EventTime), 0)
 
@@ -94,7 +91,7 @@ func (h *handler) receiveEvent(ctx context.Context, channel courier.Channel, w h
 		}
 
 		text := payload.Event.Text
-		msg := h.Backend().NewIncomingMsg(channel, urn, text, clog).WithReceivedOn(date).WithExternalID(payload.EventID)
+		msg := h.Backend().NewIncomingMsg(channel, urn, text, payload.EventID, clog).WithReceivedOn(date)
 
 		for _, attURL := range attachmentURLs {
 			msg.WithAttachment(attURL)
@@ -172,7 +169,15 @@ func (h *handler) Send(ctx context.Context, msg courier.Msg, clog *courier.Chann
 		}
 	}
 
-	if msg.Text() != "" {
+	if len(msg.QuickReplies()) != 0 {
+		_, err := sendQuickReplies(msg, botToken, clog)
+		if err != nil {
+			clog.RawError(err)
+			return status, nil
+		}
+	}
+
+	if msg.Text() != "" && len(msg.QuickReplies()) == 0 {
 		err := sendTextMsgPart(msg, botToken, clog)
 		if err != nil {
 			clog.RawError(err)
@@ -292,6 +297,72 @@ func sendFilePart(msg courier.Msg, token string, fileParams *FileParams, clog *c
 
 	return nil
 }
+func sendQuickReplies(msg courier.Msg, botToken string, clog *courier.ChannelLog) (*courier.ChannelLog, error) {
+	sendURL := apiURL + "/chat.postMessage"
+
+	payload := &mtPayload{
+		Channel: msg.URN().Path(),
+		Blocks: []Block{
+			{
+				Type: "section",
+				Text: &Text{
+					Type:  "plain_text",
+					Text:  msg.Text(),
+					Emoji: true,
+				},
+			},
+		},
+	}
+
+	bl := Block{
+		Type: "actions",
+	}
+	payload.Blocks = append(payload.Blocks, bl)
+
+	for _, qr := range msg.QuickReplies() {
+
+		bt := Button{
+			Type: "button",
+			Text: Text{
+				Type:  "plain_text",
+				Emoji: true,
+				Text:  qr,
+			},
+			Value: qr,
+		}
+		payload.Blocks[1].Elements = append(payload.Blocks[1].Elements, bt)
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, sendURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", botToken))
+
+	resp, respBody, err := handlers.RequestHTTP(req, clog)
+	if err != nil || resp.StatusCode/100 != 2 {
+		return clog, errors.New("error uploading file to slack")
+	}
+
+	ok, err := jsonparser.GetBoolean(respBody, "ok")
+	if err != nil {
+		return clog, err
+	}
+
+	if !ok {
+		_, err := jsonparser.GetString(respBody, "error")
+		if err != nil {
+			return clog, err
+		}
+	}
+	return clog, nil
+}
 
 // DescribeURN handles Slack user details
 func (h *handler) DescribeURN(ctx context.Context, channel courier.Channel, urn urns.URN, clog *courier.ChannelLog) (map[string]string, error) {
@@ -320,11 +391,30 @@ func (h *handler) DescribeURN(ctx context.Context, channel courier.Channel, urn 
 	return map[string]string{"name": uInfo.User.RealName}, nil
 }
 
-// mtPayload is a struct that represents the body of a SendMmsg text part.
-// https://api.slack.com/methods/chat.postMessage
+// mtPayload is a struct that represents the body of a SendMmsg text part
 type mtPayload struct {
-	Channel string `json:"channel"`
-	Text    string `json:"text"`
+	Channel string  `json:"channel"`
+	Text    string  `json:"text,omitempty"`
+	Blocks  []Block `json:"blocks,omitempty"`
+}
+
+type Block struct {
+	Type     string   `json:"type,omitempty"`
+	Text     *Text    `json:"text,omitempty"`
+	Elements []Button `json:"elements,omitempty"`
+}
+
+type Text struct {
+	Type  string `json:"type,omitempty"`
+	Text  string `json:"text,omitempty"` //length: 75 characters
+	Emoji bool   `json:"emoji,omitempty"`
+}
+
+type Button struct {
+	Type  string `json:"type"`
+	Text  Text   `json:"text,omitempty"`
+	URL   string `json:"url,omitempty"`
+	Value string `json:"value"`
 }
 
 // moPayload is a struct that represents message payload from message type event.
@@ -336,25 +426,65 @@ type moPayload struct {
 		Channel     string `json:"channel,omitempty"`
 		User        string `json:"user,omitempty"`
 		Text        string `json:"text,omitempty"`
+		Ts          string `json:"ts,omitempty"`
+		EventTs     string `json:"event_ts,omitempty"`
 		ChannelType string `json:"channel_type,omitempty"`
 		Files       []File `json:"files"`
 		BotID       string `json:"bot_id,omitempty"`
 	} `json:"event,omitempty"`
-	Type      string `json:"type,omitempty"`
-	EventID   string `json:"event_id,omitempty"`
-	EventTime int    `json:"event_time,omitempty"`
-	Challenge string `json:"challenge,omitempty"`
+	Type           string   `json:"type,omitempty"`
+	AuthedUsers    []string `json:"authed_users,omitempty"`
+	AuthedTeams    []string `json:"authed_teams,omitempty"`
+	Authorizations []struct {
+		EnterpriseID string `json:"enterprise_id,omitempty"`
+		TeamID       string `json:"team_id,omitempty"`
+		UserID       string `json:"user_id,omitempty"`
+		IsBot        bool   `json:"is_bot,omitempty"`
+	} `json:"authorizations,omitempty"`
+	EventContext string `json:"event_context,omitempty"`
+	EventID      string `json:"event_id,omitempty"`
+	EventTime    int    `json:"event_time,omitempty"`
+	Challenge    string `json:"challenge,omitempty"`
 }
 
 // File is a struct that represents file item that can be present in Files list in message event, or in FileResponse or in FileParams
 type File struct {
 	ID                 string `json:"id"`
+	Created            int    `json:"created"`
+	Timestamp          int    `json:"timestamp"`
+	Name               string `json:"name"`
+	Title              string `json:"title"`
 	Mimetype           string `json:"mimetype"`
+	Filetype           string `json:"filetype"`
+	PrettyType         string `json:"pretty_type"`
+	User               string `json:"user"`
+	Editable           bool   `json:"editable"`
+	Size               int    `json:"size"`
+	Mode               string `json:"mode"`
+	IsExternal         bool   `json:"is_external"`
+	ExternalType       string `json:"external_type"`
+	IsPublic           bool   `json:"is_public"`
+	PublicURLShared    bool   `json:"public_url_shared"`
+	DisplayAsBot       bool   `json:"display_as_bot"`
+	Username           string `json:"username"`
+	URLPrivate         string `json:"url_private"`
 	URLPrivateDownload string `json:"url_private_download"`
+	MediaDisplayType   string `json:"media_display_type"`
+	Thumb64            string `json:"thumb_64"`
+	Thumb80            string `json:"thumb_80"`
+	Thumb360           string `json:"thumb_360"`
+	Thumb360W          int    `json:"thumb_360_w"`
+	Thumb360H          int    `json:"thumb_360_h"`
+	Thumb160           string `json:"thumb_160"`
+	OriginalW          int    `json:"original_w"`
+	OriginalH          int    `json:"original_h"`
+	ThumbTiny          string `json:"thumb_tiny"`
+	Permalink          string `json:"permalink"`
 	PermalinkPublic    string `json:"permalink_public"`
+	HasRichPreview     bool   `json:"has_rich_preview"`
 }
 
-// FileResponse is a struct that represents the response from a request in files.sharedPublicURL to make public and shareable a file that is sent in a message.
+// FileResponse is a struct that represents the response from a request in files.sharedPublicURL to make public and shareable a file that is sent in a message, more information see https://api.slack.com/methods/files.sharedPublicURL.
 // https://api.slack.com/methods/files.sharedPublicURL.
 type FileResponse struct {
 	OK    bool   `json:"ok"`

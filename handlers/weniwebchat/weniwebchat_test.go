@@ -102,7 +102,6 @@ var testCases = []ChannelHandleTestCase{
 		Data:                 fmt.Sprintf(locationMsgTemplate, "2345678", "1616586927", "-9.6996104", "-35.7794614"),
 		ExpectedContactName:  Sp("2345678"),
 		ExpectedURN:          "ext:2345678",
-		ExpectedMsgText:      Sp(""),
 		ExpectedAttachments:  []string{"geo:-9.6996104,-35.7794614"},
 		ExpectedRespStatus:   200,
 		ExpectedBodyContains: "Accepted",

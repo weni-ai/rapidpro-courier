@@ -43,8 +43,8 @@ func newHandler() courier.ChannelHandler {
 // Initialize is called by the engine once everything is loaded
 func (h *handler) Initialize(s courier.Server) error {
 	h.SetServer(s)
-	s.AddHandlerRoute(h, http.MethodPost, "receive", h.receiveMessage)
-	s.AddHandlerRoute(h, http.MethodGet, "status", h.receiveStatus)
+	s.AddHandlerRoute(h, http.MethodPost, "receive", courier.ChannelLogTypeMsgReceive, h.receiveMessage)
+	s.AddHandlerRoute(h, http.MethodGet, "status", courier.ChannelLogTypeMsgReceive, h.receiveStatus)
 	return nil
 }
 
@@ -74,7 +74,7 @@ func (h *handler) receiveMessage(ctx context.Context, channel courier.Channel, w
 	}
 
 	// build our msg
-	msg := h.Backend().NewIncomingMsg(channel, urn, form.Message, clog).WithExternalID(form.ID).WithReceivedOn(date)
+	msg := h.Backend().NewIncomingMsg(channel, urn, form.Message, form.ID, clog).WithReceivedOn(date)
 
 	// and finally write our message
 	return handlers.WriteMsgsAndResponse(ctx, h, []courier.Msg{msg}, w, r, clog)
@@ -95,26 +95,28 @@ type statusForm struct {
 
 // receiveStatus is our HTTP handler function for status updates
 func (h *handler) receiveStatus(ctx context.Context, channel courier.Channel, w http.ResponseWriter, r *http.Request, clog *courier.ChannelLog) ([]courier.Event, error) {
+	return nil, handlers.WriteAndLogRequestIgnored(ctx, h, channel, w, r, "ignoring sent report (message aready wired)")
+
 	// get our params
-	form := &statusForm{}
-	err := handlers.DecodeAndValidateForm(form, r)
-	if err != nil {
-		return nil, handlers.WriteAndLogRequestError(ctx, h, channel, w, r, err)
-	}
+	// form := &statusForm{}
+	// err := handlers.DecodeAndValidateForm(form, r)
+	// if err != nil {
+	// 	return nil, handlers.WriteAndLogRequestError(ctx, h, channel, w, r, err)
+	// }
 
-	msgStatus, found := statusMapping[form.Status]
-	if !found {
-		return nil, handlers.WriteAndLogRequestError(ctx, h, channel, w, r, fmt.Errorf("unknown status '%d', must be one of 1,2,4,8,16", form.Status))
-	}
+	// msgStatus, found := statusMapping[form.Status]
+	// if !found {
+	// 	return nil, handlers.WriteAndLogRequestError(ctx, h, channel, w, r, fmt.Errorf("unknown status '%d', must be one of 1,2,4,8,16", form.Status))
+	// }
 
-	// if we are ignoring delivery reports and this isn't failed then move on
-	if channel.BoolConfigForKey(configIgnoreSent, false) && msgStatus == courier.MsgSent {
-		return nil, handlers.WriteAndLogRequestIgnored(ctx, h, channel, w, r, "ignoring sent report (message aready wired)")
-	}
+	// // if we are ignoring delivery reports and this isn't failed then move on
+	// if channel.BoolConfigForKey(configIgnoreSent, false) && msgStatus == courier.MsgSent {
+	// 	return nil, handlers.WriteAndLogRequestIgnored(ctx, h, channel, w, r, "ignoring sent report (message aready wired)")
+	// }
 
-	// write our status
-	status := h.Backend().NewMsgStatusForID(channel, form.ID, msgStatus, clog)
-	return handlers.WriteMsgStatusAndResponse(ctx, h, channel, status, w, r)
+	// // write our status
+	// status := h.Backend().NewMsgStatusForID(channel, form.ID, msgStatus, clog)
+	// return handlers.WriteMsgStatusAndResponse(ctx, h, channel, status, w, r)
 }
 
 // Send sends the given message, logging any HTTP calls or errors
@@ -206,7 +208,8 @@ func (h *handler) Send(ctx context.Context, msg courier.Msg, clog *courier.Chann
 		resp, _, err = handlers.RequestHTTPInsecure(req, clog)
 	}
 
-	status := h.Backend().NewMsgStatusForID(msg.Channel(), msg.ID(), courier.MsgErrored, clog)
+	status := h.Backend().NewMsgStatusForID(msg.Channel(), msg.ID(), courier.MsgFailed, clog)
+
 	if err == nil && resp.StatusCode/100 == 2 {
 		status.SetStatus(courier.MsgWired)
 	}

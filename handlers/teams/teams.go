@@ -16,6 +16,7 @@ import (
 	"github.com/nyaruka/courier/handlers"
 	"github.com/nyaruka/courier/utils"
 	"github.com/nyaruka/gocommon/urns"
+	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 )
 
@@ -42,7 +43,7 @@ func newHandler() courier.ChannelHandler {
 
 func (h *handler) Initialize(s courier.Server) error {
 	h.SetServer(s)
-	s.AddHandlerRoute(h, http.MethodPost, "receive", h.receiveEvent)
+	s.AddHandlerRoute(h, http.MethodPost, "receive", courier.ChannelLogTypeMsgReceive, h.receiveEvent)
 	return nil
 }
 
@@ -182,7 +183,9 @@ func (h *handler) receiveEvent(ctx context.Context, channel courier.Channel, w h
 		return nil, handlers.WriteAndLogRequestError(ctx, h, channel, w, r, err)
 	}
 
-	serviceURL := payload.ServiceUrl
+	path := strings.Split(payload.ServiceURL, "//")
+	serviceURL := path[1]
+
 	var urn urns.URN
 
 	// the list of events we deal with
@@ -197,21 +200,23 @@ func (h *handler) receiveEvent(ctx context.Context, channel courier.Channel, w h
 	}
 
 	if payload.Type == "message" {
-		sender := payload.Conversation.ID
+		sender := strings.Split(payload.Conversation.ID, "a:")
 
-		urn = newTeamsURN(sender + teamsServiceURLPrefix + serviceURL)
+		urn, err = urns.NewTeamsURN(sender[1] + ":" + path[1])
+		if err != nil {
+			return nil, handlers.WriteAndLogRequestError(ctx, h, channel, w, r, err)
+		}
 
 		text := payload.Text
 		attachmentURLs := make([]string, 0, 2)
 
 		for _, att := range payload.Attachments {
-			if att.ContentType != "" && att.ContentUrl != "" {
-				attachmentURLs = append(attachmentURLs, att.ContentUrl)
+			if att.ContentType != "" && att.ContentURL != "" {
+				attachmentURLs = append(attachmentURLs, att.ContentURL)
 			}
 		}
 
-		ev := h.Backend().NewIncomingMsg(channel, urn, text, clog).WithExternalID(payload.Id).WithReceivedOn(date)
-		event := h.Backend().CheckExternalIDSeen(ev)
+		event := h.Backend().NewIncomingMsg(channel, urn, text, payload.ID, clog).WithReceivedOn(date)
 
 		// add any attachment URL found
 		for _, attURL := range attachmentURLs {
@@ -222,8 +227,6 @@ func (h *handler) receiveEvent(ctx context.Context, channel courier.Channel, w h
 		if err != nil {
 			return nil, err
 		}
-
-		h.Backend().WriteExternalIDSeen(event)
 
 		events = append(events, event)
 		data = append(data, courier.NewMsgReceiveData(event))
@@ -236,11 +239,6 @@ func (h *handler) receiveEvent(ctx context.Context, channel courier.Channel, w h
 			return nil, nil
 		}
 
-		act := Activity{}
-
-		act.Text = "Create Conversation"
-		act.Type = "message"
-
 		bot := ChannelAccount{}
 
 		bot.ID = channel.StringConfigForKey("botID", "")
@@ -249,21 +247,18 @@ func (h *handler) receiveEvent(ctx context.Context, channel courier.Channel, w h
 		members := []ChannelAccount{}
 
 		members = append(members, ChannelAccount{ID: userID, Role: payload.MembersAdded[0].Role})
-		tenantID := channel.StringConfigForKey("tenantID", "")
 
 		ConversationJson := &mtPayload{
-			Activity: act,
-			Bot:      bot,
-			Members:  members,
-			IsGroup:  false,
-			TenantId: tenantID,
+			Bot:     bot,
+			Members: members,
+			IsGroup: false,
 		}
 		jsonBody, err := json.Marshal(ConversationJson)
 		if err != nil {
 			return nil, err
 		}
 		token := channel.StringConfigForKey(courier.ConfigAuthToken, "")
-		req, err := http.NewRequest(http.MethodPost, serviceURL+"/v3/conversations", bytes.NewReader(jsonBody))
+		req, err := http.NewRequest(http.MethodPost, payload.ServiceURL+"/v3/conversations", bytes.NewReader(jsonBody))
 
 		if err != nil {
 			return nil, err
@@ -273,7 +268,7 @@ func (h *handler) receiveEvent(ctx context.Context, channel courier.Channel, w h
 
 		resp, respBody, err := handlers.RequestHTTP(req, clog)
 		if err != nil || resp.StatusCode/100 != 2 {
-			return nil, err
+			return nil, errors.New("unable to look up contact data")
 		}
 
 		var body ConversationAccount
@@ -282,8 +277,11 @@ func (h *handler) receiveEvent(ctx context.Context, channel courier.Channel, w h
 		if err != nil {
 			return nil, err
 		}
-
-		urn = newTeamsURN(body.ID + teamsServiceURLPrefix + serviceURL)
+		conversationID := strings.Split(body.ID, "a:")
+		urn, err = urns.NewTeamsURN(conversationID[1] + ":" + serviceURL)
+		if err != nil {
+			return nil, handlers.WriteAndLogRequestError(ctx, h, channel, w, r, err)
+		}
 
 		event := h.Backend().NewChannelEvent(channel, courier.NewConversation, urn, clog).WithOccurredOn(date)
 		events = append(events, event)
@@ -331,22 +329,22 @@ type ConversationAccount struct {
 	AadObjectId      string `json:"aadObjectId"`
 }
 
-type Attachment struct {
+type mtAttachment struct {
 	ContentType string `json:"contentType"`
-	ContentUrl  string `json:"contentUrl"`
+	ContentURL  string `json:"contentUrl"`
 	Name        string `json:"name,omitempty"`
 }
 
 type Activity struct {
 	Action       string              `json:"action,omitempty"`
-	Attachments  []Attachment        `json:"attachments,omitempty"`
-	ChannelId    string              `json:"channelId,omitempty"`
+	Attachments  []mtAttachment      `json:"attachments,omitempty"`
+	ChannelID    string              `json:"channelId,omitempty"`
 	Conversation ConversationAccount `json:"conversation,omitempty"`
-	Id           string              `json:"id,omitempty"`
+	ID           string              `json:"id,omitempty"`
 	MembersAdded []ChannelAccount    `json:"membersAdded,omitempty"`
 	Name         string              `json:"name,omitempty"`
 	Recipient    ChannelAccount      `json:"recipient,omitempty"`
-	ServiceUrl   string              `json:"serviceUrl,omitempty"`
+	ServiceURL   string              `json:"serviceUrl,omitempty"`
 	Text         string              `json:"text"`
 	Type         string              `json:"type"`
 	Timestamp    string              `json:"timestamp,omitempty"`
@@ -372,9 +370,9 @@ func (h *handler) Send(ctx context.Context, msg courier.Msg, clog *courier.Chann
 		attType, attURL := handlers.SplitAttachment(attachment)
 		filename, err := utils.BasePathForURL(attURL)
 		if err != nil {
-			logrus.WithField("channel_uuid", msg.Channel().UUID().String()).WithError(err).Error("Error while parsing the media URL")
+			logrus.WithField("channel_uuid", msg.Channel().UUID()).WithError(err).Error("Error while parsing the media URL")
 		}
-		payload.Attachments = append(payload.Attachments, Attachment{attType, attURL, filename})
+		payload.Attachments = append(payload.Attachments, mtAttachment{attType, attURL, filename})
 	}
 
 	if msg.Text() != "" {
@@ -395,15 +393,17 @@ func (h *handler) Send(ctx context.Context, msg courier.Msg, clog *courier.Chann
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
 
-	resp, respBody, err := handlers.RequestHTTP(req, clog)
-	if err != nil || resp.StatusCode/100 != 2 {
-		return status, nil
+	_, respBody, err := handlers.RequestHTTP(req, clog)
+	if err != nil {
+		return status, err
 	}
 	status.SetStatus(courier.MsgWired)
 	externalID, err := jsonparser.GetString(respBody, "id")
-	if err == nil {
-		status.SetExternalID(externalID)
+	if err != nil {
+		logrus.WithError(errors.Errorf("unable to get message_id from body"))
+		return status, nil
 	}
+	status.SetExternalID(externalID)
 	return status, nil
 }
 

@@ -14,6 +14,7 @@ import (
 	"github.com/nyaruka/courier"
 	"github.com/nyaruka/courier/handlers"
 	"github.com/nyaruka/gocommon/urns"
+	"github.com/sirupsen/logrus"
 )
 
 func init() {
@@ -31,7 +32,7 @@ func newHandler() courier.ChannelHandler {
 // Initialize is called by the engine once everything is loaded
 func (h *handler) Initialize(s courier.Server) error {
 	h.SetServer(s)
-	s.AddHandlerRoute(h, http.MethodPost, "receive", h.receiveMsg)
+	s.AddHandlerRoute(h, http.MethodPost, "receive", courier.ChannelLogTypeMsgReceive, h.receiveEvent)
 	return nil
 }
 
@@ -51,7 +52,7 @@ type miMessage struct {
 	Longitude string `json:"longitude,omitempty"`
 }
 
-func (h *handler) receiveMsg(ctx context.Context, channel courier.Channel, w http.ResponseWriter, r *http.Request, clog *courier.ChannelLog) ([]courier.Event, error) {
+func (h *handler) receiveEvent(ctx context.Context, channel courier.Channel, w http.ResponseWriter, r *http.Request, clog *courier.ChannelLog) ([]courier.Event, error) {
 	payload := &miPayload{}
 	err := handlers.DecodeAndValidateJSON(payload, r)
 	if err != nil {
@@ -91,8 +92,7 @@ func (h *handler) receiveMsg(ctx context.Context, channel courier.Channel, w htt
 
 	// build message
 	date := time.Unix(ts, 0).UTC()
-	msg := h.Backend().NewIncomingMsg(channel, urn, payload.Message.Text, clog).WithReceivedOn(date).WithContactName(payload.From)
-
+	msg := h.Backend().NewIncomingMsg(channel, urn, payload.Message.Text, "", clog).WithReceivedOn(date).WithContactName(payload.From)
 	if mediaURL != "" {
 		msg.WithAttachment(mediaURL)
 	}
@@ -148,6 +148,7 @@ func (h *handler) Send(ctx context.Context, msg courier.Msg, clog *courier.Chann
 			} else if strings.HasPrefix(mimeType, "video") {
 				payload.Message = moMessage{Type: "video", MediaURL: attachmentURL}
 			} else {
+				logrus.WithField("channel_uuid", msg.Channel().UUID()).Error("unknown attachment mime type: ", mimeType)
 				status.SetStatus(courier.MsgFailed)
 				break attachmentsLoop
 			}
@@ -164,6 +165,7 @@ func (h *handler) Send(ctx context.Context, msg courier.Msg, clog *courier.Chann
 
 			body, err := json.Marshal(&payload)
 			if err != nil {
+				logrus.WithField("channel_uuid", msg.Channel().UUID()).WithError(err).Error("Error sending message")
 				status.SetStatus(courier.MsgFailed)
 				break attachmentsLoop
 			}
@@ -171,6 +173,7 @@ func (h *handler) Send(ctx context.Context, msg courier.Msg, clog *courier.Chann
 			req.Header.Set("Content-Type", "application/json")
 			resp, _, err := handlers.RequestHTTP(req, clog)
 			if err != nil || resp.StatusCode/100 != 2 {
+				logrus.WithField("channel_uuid", msg.Channel().UUID()).WithError(err).Error("Message Send Error")
 				status.SetStatus(courier.MsgFailed)
 				break attachmentsLoop
 			}
@@ -184,6 +187,7 @@ func (h *handler) Send(ctx context.Context, msg courier.Msg, clog *courier.Chann
 		}
 		body, err := json.Marshal(&payload)
 		if err != nil {
+			logrus.WithField("channel_uuid", msg.Channel().UUID()).WithError(err).Error("Message Send Error")
 			status.SetStatus(courier.MsgFailed)
 		} else {
 			req, _ := http.NewRequest(http.MethodPost, sendURL, bytes.NewBuffer(body))
@@ -193,6 +197,7 @@ func (h *handler) Send(ctx context.Context, msg courier.Msg, clog *courier.Chann
 				status.SetStatus(courier.MsgFailed)
 			}
 		}
+
 	}
 
 	return status, nil

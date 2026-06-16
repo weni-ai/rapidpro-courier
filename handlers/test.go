@@ -64,6 +64,26 @@ type MockedRequest struct {
 	BodyContains string
 }
 
+// MockedResponse is a fake HTTP response
+type MockedResponse struct {
+	Status int
+	Body   string
+}
+
+// Tp is utility method to get the pointer to the passed in time
+func Tp(tm time.Time) *time.Time { return &tm }
+
+// utility method to make sure the passed in host is up, prevents races with our test server
+func ensureTestServerUp(host string) {
+	for i := 0; i < 20; i++ {
+		_, err := http.Get(host)
+		if err == nil {
+			break
+		}
+		time.Sleep(time.Microsecond * 100)
+	}
+}
+
 func (m MockedRequest) Matches(r *http.Request, body []byte) bool {
 	return m.Method == r.Method && m.Path == r.URL.Path && m.RawQuery == r.URL.RawQuery && (m.Body == string(body) || (m.BodyContains != "" && strings.Contains(string(body), m.BodyContains)))
 }
@@ -265,11 +285,14 @@ type ChannelSendTestCase struct {
 	MsgURNAuth              string
 	MsgAttachments          []string
 	MsgQuickReplies         []string
+	MsgLocale               courier.Locale
 	MsgTopic                string
 	MsgHighPriority         bool
 	MsgResponseToExternalID string
 	MsgMetadata             json.RawMessage
 	MsgFlow                 *courier.FlowReference
+	MsgOrigin               courier.MsgOrigin
+	MsgContactLastSeenOn    *time.Time
 
 	MockResponseStatus int
 	MockResponseBody   string
@@ -301,13 +324,18 @@ func RunChannelSendTestCases(t *testing.T, channel courier.Channel, handler cour
 
 	for _, tc := range testCases {
 		mockRRCount := 0
+		msgOrigin := courier.MsgOriginFlow
+		if tc.MsgOrigin != "" {
+			msgOrigin = tc.MsgOrigin
+		}
 
 		mb.Reset()
 
 		t.Run(tc.Label, func(t *testing.T) {
 			require := require.New(t)
 
-			msg := mb.NewOutgoingMsg(channel, courier.NewMsgID(10), urns.URN(tc.MsgURN), tc.MsgText, tc.MsgHighPriority, tc.MsgQuickReplies, tc.MsgTopic, tc.MsgResponseToExternalID, tc.MsgTextLanguage)
+			msg := mb.NewOutgoingMsg(channel, 10, urns.URN(tc.MsgURN), tc.MsgText, tc.MsgHighPriority, tc.MsgQuickReplies, tc.MsgTopic, tc.MsgResponseToExternalID, msgOrigin, tc.MsgContactLastSeenOn)
+			msg.WithLocale(tc.MsgLocale)
 
 			for _, a := range tc.MsgAttachments {
 				msg.WithAttachment(a)
@@ -488,6 +516,3 @@ func AssertChannelLogRedaction(t *testing.T, clog *courier.ChannelLog, vals []st
 
 // Sp is a utility method to get the pointer to the passed in string
 func Sp(s string) *string { return &s }
-
-// Tp is a utility method to get the pointer to the passed in time
-func Tp(t time.Time) *time.Time { return &t }
