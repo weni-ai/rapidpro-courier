@@ -125,4 +125,15 @@ type Messaging struct {
 		MIDs      []string `json:"mids"`
 		Watermark int64    `json:"watermark"`
 	} `json:"delivery"`
+
+	MessagingFeedback *struct {
+		FeedbackScreens []struct {
+			Questions []struct {
+				Payload  string `json:"payload"`
+				FollowUp *struct {
+					Payload string `json:"payload"`
+				} `json:"follow_up"`
+			} `json:"questions"`
+		} `json:"feedback_screens"`
+	} `json:"messaging_feedback"`
 }

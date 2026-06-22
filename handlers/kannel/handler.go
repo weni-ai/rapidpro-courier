@@ -95,19 +95,17 @@ type statusForm struct {
 
 // receiveStatus is our HTTP handler function for status updates
 func (h *handler) receiveStatus(ctx context.Context, channel courier.Channel, w http.ResponseWriter, r *http.Request, clog *courier.ChannelLog) ([]courier.Event, error) {
-	return nil, handlers.WriteAndLogRequestIgnored(ctx, h, channel, w, r, "ignoring sent report (message aready wired)")
-
 	// get our params
-	// form := &statusForm{}
-	// err := handlers.DecodeAndValidateForm(form, r)
-	// if err != nil {
-	// 	return nil, handlers.WriteAndLogRequestError(ctx, h, channel, w, r, err)
-	// }
+	form := &statusForm{}
+	err := handlers.DecodeAndValidateForm(form, r)
+	if err != nil {
+		return nil, handlers.WriteAndLogRequestError(ctx, h, channel, w, r, err)
+	}
 
-	// msgStatus, found := statusMapping[form.Status]
-	// if !found {
-	// 	return nil, handlers.WriteAndLogRequestError(ctx, h, channel, w, r, fmt.Errorf("unknown status '%d', must be one of 1,2,4,8,16", form.Status))
-	// }
+	msgStatus, found := statusMapping[form.Status]
+	if !found {
+		return nil, handlers.WriteAndLogRequestError(ctx, h, channel, w, r, fmt.Errorf("unknown status '%d', must be one of 1,2,4,8,16", form.Status))
+	}
 
 	// if we are ignoring delivery reports and this isn't failed then move on
 	if channel.BoolConfigForKey(configIgnoreSent, false) && msgStatus == courier.MsgStatusSent {

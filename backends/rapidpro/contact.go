@@ -47,6 +47,7 @@ type Contact struct {
 	ID_    ContactID           `db:"id"`
 	UUID_  courier.ContactUUID `db:"uuid"`
 	Name_  null.String         `db:"name"`
+	Status_ string              `db:"status"`
 
 	URNID_ ContactURNID `db:"urn_id"`
 

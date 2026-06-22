@@ -54,6 +54,8 @@ var (
 	}
 )
 
+var maxMsgLength = maxMsgLengthFBA
+
 // keys for extra in channel events
 const (
 	referrerIDKey = "referrer_id"
@@ -1058,9 +1060,9 @@ func (h *handler) sendWhatsAppMsg(ctx context.Context, msg courier.MsgOut, clog 
 								zeroIndex = true
 							}
 							payloadAudio = whatsapp.SendRequest{MessagingProduct: "whatsapp", RecipientType: "individual", To: msg.URN().Path(), Type: "audio", Audio: &whatsapp.Media{Link: attURL}}
-							err := h.requestWAC(payloadAudio, accessToken, status, wacPhoneURL, zeroIndex, clog)
+							_, err := h.requestWAC(payloadAudio, accessToken, status, wacPhoneURL, zeroIndex, clog)
 							if err != nil {
-								return status, nil
+								return status, err
 							}
 						} else {
 							interactive.Type = "button"
@@ -1102,7 +1104,7 @@ func (h *handler) sendWhatsAppMsg(ctx context.Context, msg courier.MsgOut, clog 
 					for i, qr := range qrs {
 						section.Rows[i] = whatsapp.SectionRow{
 							ID:    fmt.Sprint(i),
-							Title: text,
+							Title: qr,
 						}
 					}
 
@@ -1135,7 +1137,7 @@ func (h *handler) sendWhatsAppMsg(ctx context.Context, msg courier.MsgOut, clog 
 			zeroIndex = true
 		}
 
-		err := h.requestWAC(payload, accessToken, status, wacPhoneURL, zeroIndex, clog)
+		respPayload, err := h.requestWAC(payload, accessToken, status, wacPhoneURL, zeroIndex, clog)
 		if err != nil {
 			return status, err
 		}
@@ -1147,7 +1149,7 @@ func (h *handler) sendWhatsAppMsg(ctx context.Context, msg courier.MsgOut, clog 
 				if err != nil {
 					return status, nil
 				}
-				err = status.SetUpdatedURN(msg.URN(), toUpdateURN)
+				err = status.SetURNUpdate(msg.URN(), toUpdateURN)
 				if err != nil {
 					clog.Error(courier.ErrorResponseUnexpected("unable to update contact URN for a new based on wa_id"))
 				}
@@ -1161,12 +1163,12 @@ func (h *handler) sendWhatsAppMsg(ctx context.Context, msg courier.MsgOut, clog 
 	return status, nil
 }
 
-func (h *handler) requestWAC(payload whatsapp.SendRequest, accessToken string, status courier.StatusUpdate, wacPhoneURL *url.URL, zeroIndex bool, clog *courier.ChannelLog) error {
+func (h *handler) requestWAC(payload whatsapp.SendRequest, accessToken string, status courier.StatusUpdate, wacPhoneURL *url.URL, zeroIndex bool, clog *courier.ChannelLog) (*whatsapp.SendResponse, error) {
 	jsonBody := jsonx.MustMarshal(payload)
 
 	req, err := http.NewRequest(http.MethodPost, wacPhoneURL.String(), bytes.NewReader(jsonBody))
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
@@ -1178,12 +1180,12 @@ func (h *handler) requestWAC(payload whatsapp.SendRequest, accessToken string, s
 	err = json.Unmarshal(respBody, respPayload)
 	if err != nil {
 		clog.Error(courier.ErrorResponseUnparseable("JSON"))
-		return nil
+		return nil, nil
 	}
 
 	if respPayload.Error.Code != 0 {
 		clog.Error(courier.ErrorExternal(strconv.Itoa(respPayload.Error.Code), respPayload.Error.Message))
-		return nil
+		return nil, nil
 	}
 
 	externalID := respPayload.Messages[0].ID
@@ -1192,7 +1194,7 @@ func (h *handler) requestWAC(payload whatsapp.SendRequest, accessToken string, s
 	}
 	// this was wired successfully
 	status.SetStatus(courier.MsgStatusWired)
-	return nil
+	return respPayload, nil
 }
 
 // DescribeURN looks up URN metadata for new contacts

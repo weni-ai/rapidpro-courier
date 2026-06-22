@@ -81,6 +81,15 @@ type Change struct {
 				Code  int    `json:"code"`
 				Title string `json:"title"`
 			} `json:"errors"`
+			Contacts []struct {
+				Name struct {
+					FormattedName string `json:"formatted_name"`
+				} `json:"name"`
+				Phones []struct {
+					Phone string `json:"phone"`
+					Type  string `json:"type"`
+				} `json:"phones"`
+			} `json:"contacts"`
 		} `json:"messages"`
 		Statuses []struct {
 			ID           string `json:"id"`
@@ -218,6 +227,10 @@ type SendResponse struct {
 	Messages []*struct {
 		ID string `json:"id"`
 	} `json:"messages"`
+	Contacts []struct {
+		Input string `json:"input"`
+		WaID  string `json:"wa_id"`
+	} `json:"contacts"`
 	Error struct {
 		Message string `json:"message"`
 		Code    int    `json:"code"`

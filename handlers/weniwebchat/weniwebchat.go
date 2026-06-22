@@ -97,7 +97,7 @@ func (h *handler) receiveEvent(ctx context.Context, channel courier.Channel, w h
 		msg.WithAttachment(mediaURL)
 	}
 
-	return handlers.WriteMsgsAndResponse(ctx, h, []courier.Msg{msg}, w, r, clog)
+	return handlers.WriteMsgsAndResponse(ctx, h, []courier.MsgIn{msg}, w, r, clog)
 }
 
 var timestamp = ""
@@ -120,12 +120,12 @@ type moMessage struct {
 	QuickReplies []string `json:"quick_replies,omitempty"`
 }
 
-func (h *handler) Send(ctx context.Context, msg courier.Msg, clog *courier.ChannelLog) (courier.MsgStatus, error) {
-	status := h.Backend().NewMsgStatusForID(msg.Channel(), msg.ID(), courier.MsgSent, clog)
+func (h *handler) Send(ctx context.Context, msg courier.MsgOut, clog *courier.ChannelLog) (courier.StatusUpdate, error) {
+	status := h.Backend().NewStatusUpdate(msg.Channel(), msg.ID(), courier.MsgStatusSent, clog)
 
 	baseURL := msg.Channel().StringConfigForKey(courier.ConfigBaseURL, "")
 	if baseURL == "" {
-		return nil, errors.New("blank base_url")
+		return status, errors.New("blank base_url")
 	}
 
 	sendURL := fmt.Sprintf("%s/send", baseURL)
@@ -149,7 +149,7 @@ func (h *handler) Send(ctx context.Context, msg courier.Msg, clog *courier.Chann
 				payload.Message = moMessage{Type: "video", MediaURL: attachmentURL}
 			} else {
 				logrus.WithField("channel_uuid", msg.Channel().UUID()).Error("unknown attachment mime type: ", mimeType)
-				status.SetStatus(courier.MsgFailed)
+				status.SetStatus(courier.MsgStatusFailed)
 				break attachmentsLoop
 			}
 
@@ -166,15 +166,15 @@ func (h *handler) Send(ctx context.Context, msg courier.Msg, clog *courier.Chann
 			body, err := json.Marshal(&payload)
 			if err != nil {
 				logrus.WithField("channel_uuid", msg.Channel().UUID()).WithError(err).Error("Error sending message")
-				status.SetStatus(courier.MsgFailed)
+				status.SetStatus(courier.MsgStatusFailed)
 				break attachmentsLoop
 			}
 			req, _ := http.NewRequest(http.MethodPost, sendURL, bytes.NewBuffer(body))
 			req.Header.Set("Content-Type", "application/json")
-			resp, _, err := handlers.RequestHTTP(req, clog)
+			resp, _, err := h.RequestHTTP(req, clog)
 			if err != nil || resp.StatusCode/100 != 2 {
 				logrus.WithField("channel_uuid", msg.Channel().UUID()).WithError(err).Error("Message Send Error")
-				status.SetStatus(courier.MsgFailed)
+				status.SetStatus(courier.MsgStatusFailed)
 				break attachmentsLoop
 			}
 		}
@@ -188,13 +188,13 @@ func (h *handler) Send(ctx context.Context, msg courier.Msg, clog *courier.Chann
 		body, err := json.Marshal(&payload)
 		if err != nil {
 			logrus.WithField("channel_uuid", msg.Channel().UUID()).WithError(err).Error("Message Send Error")
-			status.SetStatus(courier.MsgFailed)
+			status.SetStatus(courier.MsgStatusFailed)
 		} else {
 			req, _ := http.NewRequest(http.MethodPost, sendURL, bytes.NewBuffer(body))
 			req.Header.Set("Content-Type", "application/json")
-			resp, _, err := handlers.RequestHTTP(req, clog)
+			resp, _, err := h.RequestHTTP(req, clog)
 			if err != nil || resp.StatusCode/100 != 2 {
-				status.SetStatus(courier.MsgFailed)
+				status.SetStatus(courier.MsgStatusFailed)
 			}
 		}
 

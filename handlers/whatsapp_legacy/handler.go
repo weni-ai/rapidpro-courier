@@ -13,13 +13,11 @@ import (
 	"time"
 
 	"github.com/buger/jsonparser"
-	"github.com/gabriel-vasile/mimetype"
 	"github.com/gomodule/redigo/redis"
 	"github.com/nyaruka/courier"
 	"github.com/nyaruka/courier/backends/rapidpro"
 	"github.com/nyaruka/courier/handlers"
 	"github.com/nyaruka/courier/utils"
-	"github.com/nyaruka/gocommon/httpx"
 	"github.com/nyaruka/gocommon/i18n"
 	"github.com/nyaruka/gocommon/jsonx"
 	"github.com/nyaruka/gocommon/urns"
@@ -183,16 +181,8 @@ type eventsPayload struct {
 func checkBlockedContact(payload *eventsPayload, ctx context.Context, channel courier.Channel, h *handler, clog *courier.ChannelLog) error {
 	if len(payload.Contacts) > 0 {
 		if contactURN, err := urns.NewWhatsAppURN(payload.Contacts[0].WaID); err == nil {
-			if contact, err := h.Backend().GetContact(ctx, channel, contactURN, channel.StringConfigForKey(courier.ConfigAuthToken, ""), payload.Contacts[0].Profile.Name, clog); err == nil {
-				c, err := json.Marshal(contact)
-				if err != nil {
-					return err
-				}
-				var dbc rapidpro.DBContact
-				if err = json.Unmarshal(c, &dbc); err != nil {
-					return err
-				}
-				if dbc.Status_ == "B" {
+			if contact, err := h.Backend().GetContact(ctx, channel, contactURN, nil, payload.Contacts[0].Profile.Name, clog); err == nil {
+				if dbContact, ok := contact.(*rapidpro.Contact); ok && dbContact.Status_ == "B" {
 					return errors.New("blocked contact sending message")
 				}
 			}
@@ -797,6 +787,28 @@ func buildPayloads(msg courier.MsgOut, h *handler, clog *courier.ChannelLog) ([]
 			}
 			payload.Template.Components = append(payload.Template.Components, *component)
 
+			if len(msg.Attachments()) > 0 {
+				mimeType, mediaURL := handlers.SplitAttachment(msg.Attachments()[0])
+				headerComponent := Component{Type: "header"}
+				param := Param{}
+
+				if strings.HasPrefix(mimeType, "image") {
+					param.Type = "image"
+					param.Image = &mediaObject{Link: mediaURL}
+				} else if strings.HasPrefix(mimeType, "video") {
+					param.Type = "video"
+					param.Video = &mediaObject{Link: mediaURL}
+				} else if strings.HasPrefix(mimeType, "application") {
+					param.Type = "document"
+					param.Document = &mediaObject{Link: mediaURL}
+				}
+
+				if param.Type != "" {
+					headerComponent.Parameters = []Param{param}
+					payload.Template.Components = append(payload.Template.Components, headerComponent)
+				}
+			}
+
 			payloads = append(payloads, payload)
 
 		} else {
@@ -946,7 +958,6 @@ func (h *handler) fetchMediaID(msg courier.MsgOut, mimeType, mediaURL string, cl
 		return "", errors.Wrapf(err, "error building request to media endpoint")
 	}
 	setWhatsAppAuthHeader(&req.Header, msg.Channel())
-	mtype := http.DetectContentType(respBody)
 
 	resp, respBody, err = h.RequestHTTP(req, clog)
 	if err != nil || resp.StatusCode/100 != 2 {

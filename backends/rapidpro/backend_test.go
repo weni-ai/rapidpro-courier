@@ -41,6 +41,7 @@ func testConfig() *courier.Config {
 	config.DB = "postgres://courier_test:temba@localhost:5432/courier_test?sslmode=disable"
 	config.Redis = "redis://localhost:6379/0"
 	config.MediaDomain = "nyaruka.s3.com"
+	config.SpoolDir = "_test_spool"
 	return config
 }
 
@@ -83,6 +84,9 @@ func (ts *BackendTestSuite) TearDownSuite() {
 	ts.b.Cleanup()
 
 	if err := os.RemoveAll(storageDir); err != nil {
+		panic(err)
+	}
+	if err := os.RemoveAll("_test_spool"); err != nil {
 		panic(err)
 	}
 }

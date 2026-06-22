@@ -124,7 +124,7 @@ var messageReaction = `{
 	"type":"messageReaction"
 }`
 
-var testCases = []handlers.ChannelHandleTestCase{
+var testCases = []handlers.IncomingTestCase{
 	{
 		Label:                "Receive Message",
 		URL:                  "/c/tm/8eb23e93-5ecb-45ba-b726-3b064e0c568c/receive",
@@ -205,7 +205,7 @@ func TestHandler(t *testing.T) {
 	tmService := buildMockTeams()
 	newTestCases := newConversationUpdateTC(tmService.URL, testCases)
 	jwks_url := buildMockJwksURL()
-	handlers.RunChannelTestCases(t, testChannels, newHandler(), newTestCases)
+	handlers.RunIncomingTestCases(t, testChannels, newHandler(), newTestCases)
 	jwks_url.Close()
 	tmService.Close()
 
@@ -264,8 +264,8 @@ func buildMockTeams() *httptest.Server {
 	return server
 }
 
-func newConversationUpdateTC(newUrl string, testCase []handlers.ChannelHandleTestCase) []handlers.ChannelHandleTestCase {
-	casesWithMockedUrls := make([]handlers.ChannelHandleTestCase, len(testCases))
+func newConversationUpdateTC(newUrl string, testCase []handlers.IncomingTestCase) []handlers.IncomingTestCase {
+	casesWithMockedUrls := make([]handlers.IncomingTestCase, len(testCases))
 	for i, tc := range testCases {
 		mockedCase := tc
 		if mockedCase.Label == "Receive Conversation Update" {
@@ -276,38 +276,38 @@ func newConversationUpdateTC(newUrl string, testCase []handlers.ChannelHandleTes
 	return casesWithMockedUrls
 }
 
-var defaultSendTestCases = []handlers.ChannelSendTestCase{
+var defaultSendTestCases = []handlers.OutgoingTestCase{
 	{
 		Label:             "Plain Send",
 		MsgText:           "Simple Message",
 		MsgURN:            "teams:2022:https://smba.trafficmanager.net/br/",
-		ExpectedMsgStatus: "W", ExpectedExternalID: "1234567890",
+		ExpectedMsgStatus: courier.MsgStatusWired, ExpectedExternalID: "1234567890",
 		MockResponseBody: `{id:"1234567890"}`, MockResponseStatus: 200,
 	},
 	{Label: "Send Photo",
 		MsgURN: "teams:2022:https://smba.trafficmanager.net/br/", MsgAttachments: []string{"image/jpeg:https://foo.bar/image.jpg"},
-		ExpectedMsgStatus: "W", ExpectedExternalID: "1234567890",
+		ExpectedMsgStatus: courier.MsgStatusWired, ExpectedExternalID: "1234567890",
 		MockResponseBody: `{"id": "1234567890"}`, MockResponseStatus: 200,
 	},
 	{Label: "Send Video",
 		MsgURN: "teams:2022:https://smba.trafficmanager.net/br/", MsgAttachments: []string{"video/mp4:https://foo.bar/video.mp4"},
-		ExpectedMsgStatus: "W", ExpectedExternalID: "1234567890",
+		ExpectedMsgStatus: courier.MsgStatusWired, ExpectedExternalID: "1234567890",
 		MockResponseBody: `{"id": "1234567890"}`, MockResponseStatus: 200,
 	},
 	{Label: "Send Document",
 		MsgURN: "teams:2022:https://smba.trafficmanager.net/br/", MsgAttachments: []string{"application/pdf:https://foo.bar/document.pdf"},
-		ExpectedMsgStatus: "W", ExpectedExternalID: "1234567890",
+		ExpectedMsgStatus: courier.MsgStatusWired, ExpectedExternalID: "1234567890",
 		MockResponseBody: `{"id": "1234567890"}`, MockResponseStatus: 200,
 	},
 	{Label: "ID Error",
 		MsgText: "Error", MsgURN: "teams:2022:smba.trafficmanager.net/br/",
-		ExpectedMsgStatus: "E",
+		ExpectedMsgStatus: courier.MsgStatusErrored,
 		MockResponseBody:  `{"is_error": true}`, MockResponseStatus: 200,
 	},
 }
 
-func newSendTestCases(testSendCases []handlers.ChannelSendTestCase, url string) []handlers.ChannelSendTestCase {
-	var newtestSendCases []handlers.ChannelSendTestCase
+func newSendTestCases(testSendCases []handlers.OutgoingTestCase, url string) []handlers.OutgoingTestCase {
+	var newtestSendCases []handlers.OutgoingTestCase
 	for _, tc := range testSendCases {
 		spTC := strings.Split(tc.MsgURN, ":")
 		newURN := spTC[0] + ":" + spTC[1] + ":" + url + "/"
@@ -324,7 +324,7 @@ func TestSending(t *testing.T) {
 	serviceTM := buildMockTeams()
 	url := strings.Split(serviceTM.URL, "http://")
 	newSendTestCases := newSendTestCases(defaultSendTestCases, url[1])
-	RunChannelSendTestCases(t, defaultChannel, newHandler(), newSendTestCases, nil, nil)
+	handlers.RunOutgoingTestCases(t, defaultChannel, newHandler(), newSendTestCases, nil, nil)
 	serviceTM.Close()
 }
 
