@@ -14,6 +14,7 @@ import (
 	. "github.com/nyaruka/courier/handlers"
 	"github.com/nyaruka/courier/test"
 	"github.com/nyaruka/gocommon/httpx"
+	"github.com/nyaruka/gocommon/i18n"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -334,7 +335,7 @@ var (
 	trnReceiveURL = "/c/trn/8eb23e93-5ecb-45ba-b726-3b064e0c568c/receive"
 )
 
-var trnTestCases = []ChannelHandleTestCase{
+var trnTestCases = []IncomingTestCase{
 	{
 		Label:                 "Receive Valid Message",
 		URL:                   trnReceiveURL,
@@ -522,8 +523,9 @@ var trnTestCases = []ChannelHandleTestCase{
 		Data:                 validStatus,
 		ExpectedRespStatus:   200,
 		ExpectedBodyContains: `"type":"status"`,
-		ExpectedMsgStatus:    "S",
-		ExpectedExternalID:   "9712A34B4A8B6AD50F",
+		ExpectedStatuses: []ExpectedStatus{
+			{ExternalID: "9712A34B4A8B6AD50F", Status: courier.MsgStatusSent},
+		},
 	},
 	{
 		Label:                "Receive invalid JSON",
@@ -558,7 +560,7 @@ func TestBuildAttachmentRequest(t *testing.T) {
 }
 
 func TestHandler(t *testing.T) {
-	RunChannelTestCases(t, testChannels, newHandler(), trnTestCases)
+	RunIncomingTestCases(t, testChannels, newHandler(), trnTestCases)
 }
 
 func BenchmarkHandler(b *testing.B) {
@@ -566,12 +568,12 @@ func BenchmarkHandler(b *testing.B) {
 }
 
 // setSendURL takes care of setting the base_url to our test server host
-func setSendURL(s *httptest.Server, h courier.ChannelHandler, c courier.Channel, m courier.Msg) {
+func setSendURL(s *httptest.Server, h courier.ChannelHandler, c courier.Channel, m courier.MsgOut) {
 	retryParam = "retry"
 	c.(*test.MockChannel).SetConfig("base_url", s.URL)
 }
 
-var defaultSendTestCases = []ChannelSendTestCase{
+var defaultSendTestCases = []OutgoingTestCase{
 	{
 		Label:               "Link Sending",
 		MsgText:             "Link Sending https://link.com",
@@ -1012,7 +1014,7 @@ var defaultSendTestCases = []ChannelSendTestCase{
 	},
 }
 
-var mediaCacheSendTestCases = []ChannelSendTestCase{
+var mediaCacheSendTestCases = []OutgoingTestCase{
 	{
 		Label:          "Media Upload Error",
 		MsgText:        "document caption",
@@ -1126,7 +1128,7 @@ var mediaCacheSendTestCases = []ChannelSendTestCase{
 	},
 }
 
-var hsmSupportSendTestCases = []ChannelSendTestCase{
+var hsmSupportSendTestCases = []OutgoingTestCase{
 	{
 		Label:               "Template Send",
 		MsgText:             "templated message",
@@ -1141,8 +1143,8 @@ var hsmSupportSendTestCases = []ChannelSendTestCase{
 	},
 }
 
-func mockAttachmentURLs(mediaServer *httptest.Server, testCases []ChannelSendTestCase) []ChannelSendTestCase {
-	casesWithMockedUrls := make([]ChannelSendTestCase, len(testCases))
+func mockAttachmentURLs(mediaServer *httptest.Server, testCases []OutgoingTestCase) []OutgoingTestCase {
+	casesWithMockedUrls := make([]OutgoingTestCase, len(testCases))
 
 	for i, testCase := range testCases {
 		mockedCase := testCase
@@ -1173,8 +1175,8 @@ func TestSending(t *testing.T) {
 			"version":      "v2.35.2",
 		})
 
-	RunChannelSendTestCases(t, defaultChannel, newHandler(), defaultSendTestCases, []string{"token123"}, nil)
-	RunChannelSendTestCases(t, hsmSupportChannel, newHandler(), hsmSupportSendTestCases, []string{"token123"}, nil)
+	RunOutgoingTestCases(t, defaultChannel, newHandler(), defaultSendTestCases, []string{"token123"}, nil)
+	RunOutgoingTestCases(t, hsmSupportChannel, newHandler(), hsmSupportSendTestCases, []string{"token123"}, nil)
 
 	mediaServer := httptest.NewServer(http.HandlerFunc(func(res http.ResponseWriter, req *http.Request) {
 		defer req.Body.Close()
@@ -1184,17 +1186,17 @@ func TestSending(t *testing.T) {
 	defer mediaServer.Close()
 	mediaCacheSendTestCases := mockAttachmentURLs(mediaServer, mediaCacheSendTestCases)
 
-	RunChannelSendTestCases(t, defaultChannel, newHandler(), mediaCacheSendTestCases, []string{"token123"}, nil)
+	RunOutgoingTestCases(t, defaultChannel, newHandler(), mediaCacheSendTestCases, []string{"token123"}, nil)
 }
 
 func TestGetSupportedLanguage(t *testing.T) {
-	assert.Equal(t, "en", getSupportedLanguage(courier.NilLocale))
-	assert.Equal(t, "en", getSupportedLanguage(courier.Locale("eng")))
-	assert.Equal(t, "en_US", getSupportedLanguage(courier.Locale("eng-US")))
-	assert.Equal(t, "pt_PT", getSupportedLanguage(courier.Locale("por")))
-	assert.Equal(t, "pt_PT", getSupportedLanguage(courier.Locale("por-PT")))
-	assert.Equal(t, "pt_BR", getSupportedLanguage(courier.Locale("por-BR")))
-	assert.Equal(t, "fil", getSupportedLanguage(courier.Locale("fil")))
-	assert.Equal(t, "fr", getSupportedLanguage(courier.Locale("fra-CA")))
-	assert.Equal(t, "en", getSupportedLanguage(courier.Locale("run")))
+	assert.Equal(t, "en", getSupportedLanguage(i18n.NilLocale))
+	assert.Equal(t, "en", getSupportedLanguage(i18n.Locale("eng")))
+	assert.Equal(t, "en_US", getSupportedLanguage(i18n.Locale("eng-US")))
+	assert.Equal(t, "pt_PT", getSupportedLanguage(i18n.Locale("por")))
+	assert.Equal(t, "pt_PT", getSupportedLanguage(i18n.Locale("por-PT")))
+	assert.Equal(t, "pt_BR", getSupportedLanguage(i18n.Locale("por-BR")))
+	assert.Equal(t, "fil", getSupportedLanguage(i18n.Locale("fil")))
+	assert.Equal(t, "fr", getSupportedLanguage(i18n.Locale("fra-CA")))
+	assert.Equal(t, "en", getSupportedLanguage(i18n.Locale("run")))
 }
