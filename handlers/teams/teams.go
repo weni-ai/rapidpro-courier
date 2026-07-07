@@ -202,10 +202,7 @@ func (h *handler) receiveEvent(ctx context.Context, channel courier.Channel, w h
 	if payload.Type == "message" {
 		sender := strings.Split(payload.Conversation.ID, "a:")
 
-		urn, err = urns.NewTeamsURN(sender[1] + ":" + path[1])
-		if err != nil {
-			return nil, handlers.WriteAndLogRequestError(ctx, h, channel, w, r, err)
-		}
+		urn = newTeamsURN(sender[1] + ":" + path[1])
 
 		text := payload.Text
 		attachmentURLs := make([]string, 0, 2)
@@ -266,7 +263,7 @@ func (h *handler) receiveEvent(ctx context.Context, channel courier.Channel, w h
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+token)
 
-		resp, respBody, err := handlers.RequestHTTP(req, clog)
+		resp, respBody, err := h.RequestHTTP(req, clog)
 		if err != nil || resp.StatusCode/100 != 2 {
 			return nil, errors.New("unable to look up contact data")
 		}
@@ -278,12 +275,8 @@ func (h *handler) receiveEvent(ctx context.Context, channel courier.Channel, w h
 			return nil, err
 		}
 		conversationID := strings.Split(body.ID, "a:")
-		urn, err = urns.NewTeamsURN(conversationID[1] + ":" + serviceURL)
-		if err != nil {
-			return nil, handlers.WriteAndLogRequestError(ctx, h, channel, w, r, err)
-		}
-
-		event := h.Backend().NewChannelEvent(channel, courier.NewConversation, urn, clog).WithOccurredOn(date)
+		urn = newTeamsURN(conversationID[1] + ":" + serviceURL)
+		event := h.Backend().NewChannelEvent(channel, courier.EventTypeNewConversation, urn, clog).WithOccurredOn(date)
 		events = append(events, event)
 		data = append(data, courier.NewEventReceiveData(event))
 	}
@@ -350,14 +343,14 @@ type Activity struct {
 	Timestamp    string              `json:"timestamp,omitempty"`
 }
 
-func (h *handler) Send(ctx context.Context, msg courier.Msg, clog *courier.ChannelLog) (courier.MsgStatus, error) {
+func (h *handler) Send(ctx context.Context, msg courier.MsgOut, clog *courier.ChannelLog) (courier.StatusUpdate, error) {
 
 	token := msg.Channel().StringConfigForKey(courier.ConfigAuthToken, "")
 	if token == "" {
 		return nil, fmt.Errorf("missing token for TM channel")
 	}
 
-	status := h.Backend().NewMsgStatusForID(msg.Channel(), msg.ID(), courier.MsgErrored, clog)
+	status := h.Backend().NewStatusUpdate(msg.Channel(), msg.ID(), courier.MsgStatusErrored, clog)
 
 	payload := Activity{}
 
@@ -388,16 +381,16 @@ func (h *handler) Send(ctx context.Context, msg courier.Msg, clog *courier.Chann
 	req, err := http.NewRequest(http.MethodPost, msgURL, bytes.NewReader(jsonBody))
 
 	if err != nil {
-		return nil, err
+		return status, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
 
-	_, respBody, err := handlers.RequestHTTP(req, clog)
+	_, respBody, err := h.RequestHTTP(req, clog)
 	if err != nil {
 		return status, err
 	}
-	status.SetStatus(courier.MsgWired)
+	status.SetStatus(courier.MsgStatusWired)
 	externalID, err := jsonparser.GetString(respBody, "id")
 	if err != nil {
 		logrus.WithError(errors.Errorf("unable to get message_id from body"))
@@ -421,7 +414,7 @@ func (h *handler) DescribeURN(ctx context.Context, channel courier.Channel, urn 
 
 	req, _ := http.NewRequest(http.MethodGet, url, nil)
 	req.Header.Set("Authorization", "Bearer "+accessToken)
-	resp, respBody, err := handlers.RequestHTTP(req, clog)
+	resp, respBody, err := h.RequestHTTP(req, clog)
 	if err != nil || resp.StatusCode/100 != 2 {
 		return nil, fmt.Errorf("unable to look up contact data: %s", err)
 	}
