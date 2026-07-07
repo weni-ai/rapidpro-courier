@@ -17,6 +17,7 @@ import (
 	"github.com/nyaruka/courier"
 	"github.com/nyaruka/courier/handlers"
 	"github.com/nyaruka/courier/utils"
+	"github.com/nyaruka/gocommon/i18n"
 	"github.com/nyaruka/gocommon/urns"
 	"github.com/nyaruka/redisx"
 	"github.com/patrickmn/go-cache"
@@ -284,14 +285,8 @@ func (h *handler) receiveEvents(ctx context.Context, channel courier.Channel, w 
 			continue
 		}
 
-		event := h.Backend().NewMsgStatusForExternalID(channel, status.ID, msgStatus, clog)
-		err := h.Backend().WriteMsgStatus(ctx, event)
-
-		// we don't know about this message, just tell them we ignored it
-		if err == courier.ErrMsgNotFound {
-			data = append(data, courier.NewInfoData(fmt.Sprintf("message id: %s not found, ignored", status.ID)))
-			continue
-		}
+		event := h.Backend().NewStatusUpdateByExternalID(channel, status.ID, msgStatus, clog)
+		err := h.Backend().WriteStatusUpdate(ctx, event)
 
 		if err != nil {
 			return nil, err
@@ -340,12 +335,12 @@ func (h *handler) BuildAttachmentRequest(ctx context.Context, b courier.Backend,
 
 var _ courier.AttachmentRequestBuilder = (*handler)(nil)
 
-var waStatusMapping = map[string]courier.MsgStatusValue{
-	"sending":   courier.MsgWired,
-	"sent":      courier.MsgSent,
-	"delivered": courier.MsgDelivered,
-	"read":      courier.MsgDelivered,
-	"failed":    courier.MsgFailed,
+var waStatusMapping = map[string]courier.MsgStatus{
+	"sending":   courier.MsgStatusWired,
+	"sent":      courier.MsgStatusSent,
+	"delivered": courier.MsgStatusDelivered,
+	"read":      courier.MsgStatusDelivered,
+	"failed":    courier.MsgStatusFailed,
 }
 
 var waIgnoreStatuses = map[string]bool{
@@ -517,7 +512,7 @@ type mtErrorPayload struct {
 const maxMsgLength = 4096
 
 // Send sends the given message, logging any HTTP calls or errors
-func (h *handler) Send(ctx context.Context, msg courier.Msg, clog *courier.ChannelLog) (courier.MsgStatus, error) {
+func (h *handler) Send(ctx context.Context, msg courier.MsgOut, clog *courier.ChannelLog) (courier.StatusUpdate, error) {
 	conn := h.Backend().RedisPool().Get()
 	defer conn.Close()
 
@@ -534,7 +529,7 @@ func (h *handler) Send(ctx context.Context, msg courier.Msg, clog *courier.Chann
 	}
 	sendPath, _ := url.Parse("/v1/messages")
 
-	status := h.Backend().NewMsgStatusForID(msg.Channel(), msg.ID(), courier.MsgErrored, clog)
+	status := h.Backend().NewStatusUpdate(msg.Channel(), msg.ID(), courier.MsgStatusErrored, clog)
 
 	var wppID string
 
@@ -563,13 +558,13 @@ func (h *handler) Send(ctx context.Context, msg courier.Msg, clog *courier.Chann
 		// so update contact URN if wppID != ""
 		if wppID != "" {
 			newURN, _ := urns.NewWhatsAppURN(wppID)
-			err = status.SetUpdatedURN(msg.URN(), newURN)
+			err = status.SetURNUpdate(msg.URN(), newURN)
 
 			if err != nil {
 				clog.RawError(err)
 			}
 		}
-		status.SetStatus(courier.MsgWired)
+		status.SetStatus(courier.MsgStatusWired)
 	}
 
 	return status, nil
@@ -580,7 +575,7 @@ func (h *handler) WriteRequestError(ctx context.Context, w http.ResponseWriter, 
 	return courier.WriteError(w, http.StatusOK, err)
 }
 
-func buildPayloads(msg courier.Msg, h *handler, clog *courier.ChannelLog) ([]interface{}, error) {
+func buildPayloads(msg courier.MsgOut, h *handler, clog *courier.ChannelLog) ([]interface{}, error) {
 	var payloads []interface{}
 	var err error
 
@@ -916,7 +911,7 @@ func buildPayloads(msg courier.Msg, h *handler, clog *courier.ChannelLog) ([]int
 }
 
 // fetchMediaID tries to fetch the id for the uploaded media, setting the result in redis.
-func (h *handler) fetchMediaID(msg courier.Msg, mimeType, mediaURL string, clog *courier.ChannelLog) (string, error) {
+func (h *handler) fetchMediaID(msg courier.MsgOut, mimeType, mediaURL string, clog *courier.ChannelLog) (string, error) {
 	// check in cache first
 	rc := h.Backend().RedisPool().Get()
 	defer rc.Close()
@@ -993,7 +988,7 @@ func (h *handler) fetchMediaID(msg courier.Msg, mimeType, mediaURL string, clog 
 	return mediaID, nil
 }
 
-func sendWhatsAppMsg(rc redis.Conn, msg courier.Msg, sendPath *url.URL, payload interface{}, clog *courier.ChannelLog) (string, string, error) {
+func sendWhatsAppMsg(rc redis.Conn, msg courier.MsgOut, sendPath *url.URL, payload interface{}, clog *courier.ChannelLog) (string, string, error) {
 	jsonBody, err := json.Marshal(payload)
 
 	if err != nil {
@@ -1196,7 +1191,7 @@ func checkWhatsAppContact(channel courier.Channel, baseURL string, urn urns.URN,
 	}
 }
 
-func (h *handler) getTemplating(msg courier.Msg) (*MsgTemplating, error) {
+func (h *handler) getTemplating(msg courier.MsgOut) (*MsgTemplating, error) {
 	if len(msg.Metadata()) == 0 {
 		return nil, nil
 	}
@@ -1228,16 +1223,16 @@ type MsgTemplating struct {
 	Variables []string `json:"variables"`
 }
 
-func getSupportedLanguage(lc courier.Locale) string {
+func getSupportedLanguage(lc i18n.Locale) string {
 	// look for exact match
 	if lang := supportedLanguages[lc]; lang != "" {
 		return lang
 	}
 
 	// if we have a country, strip that off and look again for a match
-	l, c := lc.ToParts()
+	l, c := lc.Split()
 	if c != "" {
-		if lang := supportedLanguages[courier.Locale(l)]; lang != "" {
+		if lang := supportedLanguages[i18n.Locale(l)]; lang != "" {
 			return lang
 		}
 	}
@@ -1245,7 +1240,7 @@ func getSupportedLanguage(lc courier.Locale) string {
 }
 
 // Mapping from engine locales to supported languages, see https://developers.facebook.com/docs/whatsapp/api/messages/message-templates/
-var supportedLanguages = map[courier.Locale]string{
+var supportedLanguages = map[i18n.Locale]string{
 	"afr":    "af",    // Afrikaans
 	"sqi":    "sq",    // Albanian
 	"ara":    "ar",    // Arabic
