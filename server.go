@@ -303,7 +303,6 @@ func (s *server) channelHandleWrapper(handler ChannelHandler, handlerFunc Channe
 		secondDuration := float64(duration) / float64(time.Second)
 
 		// if we received an error, write it out and report it
-		// (Weni custom: skip log for blocked contact / too large body errors)
 		if hErr != nil {
 			slog.Error("error handling request", "error", err, "channel_uuid", channelUUID, "request", recorder.Trace.RequestTrace)
 			writeAndLogRequestError(ctx, handler, recorder.ResponseWriter, r, channel, hErr)

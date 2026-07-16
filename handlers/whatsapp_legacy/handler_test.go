@@ -2,6 +2,8 @@ package whatsapp_legacy
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
