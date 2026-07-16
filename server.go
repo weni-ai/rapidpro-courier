@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/flate"
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"log/slog"
@@ -15,13 +16,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-chi/chi"
-	"github.com/go-chi/chi/middleware"
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
 	"github.com/nyaruka/courier/utils"
 	"github.com/nyaruka/gocommon/analytics"
 	"github.com/nyaruka/gocommon/httpx"
 	"github.com/nyaruka/gocommon/jsonx"
-	"github.com/pkg/errors"
 )
 
 // for use in request.Context
@@ -370,6 +370,9 @@ func (s *server) AddHandlerRoute(handler ChannelHandler, method string, action s
 }
 
 func (s *server) handleIndex(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html")
+	w.WriteHeader(http.StatusOK)
+
 	var buf bytes.Buffer
 	buf.WriteString("<html><head><title>courier</title></head><body><pre>\n")
 	buf.WriteString(splash)
@@ -382,6 +385,9 @@ func (s *server) handleIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html")
+	w.WriteHeader(http.StatusOK)
+
 	var buf bytes.Buffer
 	buf.WriteString("<html><head><title>courier</title></head><body><pre>\n")
 	buf.WriteString(splash)
@@ -434,6 +440,7 @@ func (s *server) basicAuthRequired(h http.HandlerFunc) http.HandlerFunc {
 		if s.config.StatusUsername != "" {
 			user, pass, ok := r.BasicAuth()
 			if !ok || user != s.config.StatusUsername || pass != s.config.StatusPassword {
+				w.Header().Set("Content-Type", "text/plain")
 				w.Header().Set("WWW-Authenticate", `Basic realm="Authenticate"`)
 				w.WriteHeader(http.StatusUnauthorized)
 				w.Write([]byte("Unauthorized"))
@@ -449,6 +456,7 @@ func (s *server) tokenAuthRequired(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
 		if !strings.HasPrefix(authHeader, "Bearer ") || authHeader[7:] != s.config.AuthToken {
+			w.Header().Set("Content-Type", "text/plain")
 			w.WriteHeader(http.StatusUnauthorized)
 			w.Write([]byte("Unauthorized"))
 			return

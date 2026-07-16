@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -23,7 +25,7 @@ import (
 	"github.com/nyaruka/gocommon/urns"
 	"github.com/nyaruka/redisx"
 	"github.com/patrickmn/go-cache"
-	"github.com/pkg/errors"
+	"golang.org/x/exp/maps"
 	"golang.org/x/mod/semver"
 )
 
@@ -224,9 +226,9 @@ func (h *handler) receiveEvents(ctx context.Context, channel courier.Channel, w 
 		date := time.Unix(ts, 0).UTC()
 
 		// create our URN
-		urn, err := urns.NewWhatsAppURN(msg.From)
+		urn, err := urns.New(urns.WhatsApp, msg.From)
 		if err != nil {
-			return nil, handlers.WriteAndLogRequestError(ctx, h, channel, w, r, err)
+			return nil, handlers.WriteAndLogRequestError(ctx, h, channel, w, r, errors.New("invalid whatsapp id"))
 		}
 
 		text := ""
@@ -365,7 +367,7 @@ var waStatusMapping = map[string]courier.MsgStatus{
 	"sending":   courier.MsgStatusWired,
 	"sent":      courier.MsgStatusSent,
 	"delivered": courier.MsgStatusDelivered,
-	"read":      courier.MsgStatusDelivered,
+	"read":      courier.MsgStatusRead,
 	"failed":    courier.MsgStatusFailed,
 }
 
@@ -484,7 +486,7 @@ type templatePayload struct {
 			Policy string `json:"policy"`
 			Code   string `json:"code"`
 		} `json:"language"`
-		Components []Component `json:"components"`
+		Components []Component `json:"components,omitempty"`
 	} `json:"template"`
 }
 
@@ -537,25 +539,19 @@ type mtErrorPayload struct {
 // whatsapp only allows messages up to 4096 chars
 const maxMsgLength = 4096
 
-// Send sends the given message, logging any HTTP calls or errors
-func (h *handler) Send(ctx context.Context, msg courier.MsgOut, clog *courier.ChannelLog) (courier.StatusUpdate, error) {
+func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.SendResult, clog *courier.ChannelLog) error {
 	conn := h.Backend().RedisPool().Get()
 	defer conn.Close()
 
 	// get our token
 	token := msg.Channel().StringConfigForKey(courier.ConfigAuthToken, "")
-	if token == "" {
-		return nil, fmt.Errorf("missing token for WA channel")
-	}
-
 	urlStr := msg.Channel().StringConfigForKey(courier.ConfigBaseURL, "")
 	url, err := url.Parse(urlStr)
-	if err != nil {
-		return nil, fmt.Errorf("invalid base url set for WA channel: %s", err)
+
+	if token == "" || err != nil {
+		return courier.ErrChannelConfig
 	}
 	sendPath, _ := url.Parse("/v1/messages")
-
-	status := h.Backend().NewStatusUpdate(msg.Channel(), msg.ID(), courier.MsgStatusErrored, clog)
 
 	var wppID string
 
@@ -563,37 +559,29 @@ func (h *handler) Send(ctx context.Context, msg courier.MsgOut, clog *courier.Ch
 
 	fail := payloads == nil && err != nil
 	if fail {
-		return nil, err
+		return err
 	}
 
-	for i, payload := range payloads {
+	for _, payload := range payloads {
 		externalID := ""
 		wppID, externalID, err = h.sendWhatsAppMsg(conn, msg, sendPath, payload, clog)
 		if err != nil {
-			break
+			return err
 		}
 
-		// if this is our first message, record the external id
-		if i == 0 {
-			status.SetExternalID(externalID)
-		}
+		res.AddExternalID(externalID)
 	}
 
 	// we are wired it there were no errors
 	if err == nil {
 		// so update contact URN if wppID != ""
 		if wppID != "" {
-			newURN, _ := urns.NewWhatsAppURN(wppID)
-			err = status.SetURNUpdate(msg.URN(), newURN)
-
-			if err != nil {
-				clog.RawError(err)
-			}
+			newURN, _ := urns.New(urns.WhatsApp, wppID)
+			res.SetNewURN(newURN)
 		}
-		status.SetStatus(courier.MsgStatusWired)
 	}
 
-	return status, nil
+	return nil
 }
 
 // WriteRequestError writes the passed in error to our response writer
@@ -762,13 +750,14 @@ func buildPayloads(msg courier.MsgOut, h *handler, clog *courier.ChannelLog) ([]
 		}
 
 	} else {
-		if templating != nil {
-			namespace := templating.Namespace
+		// do we have a template?
+		if msg.Templating() != nil {
+			namespace := msg.Templating().Namespace
 			if namespace == "" {
 				namespace = msg.Channel().StringConfigForKey(configNamespace, "")
 			}
 			if namespace == "" {
-				return nil, errors.Errorf("cannot send template message without Facebook namespace for channel: %s", msg.Channel().UUID())
+				return nil, fmt.Errorf("cannot send template message without Facebook namespace for channel: %s", msg.Channel().UUID())
 			}
 
 			payload := templatePayload{
@@ -776,16 +765,29 @@ func buildPayloads(msg courier.MsgOut, h *handler, clog *courier.ChannelLog) ([]
 				Type: "template",
 			}
 			payload.Template.Namespace = namespace
-			payload.Template.Name = templating.Template.Name
+			payload.Template.Name = msg.Templating().Template.Name
 			payload.Template.Language.Policy = "deterministic"
 			payload.Template.Language.Code = langCode
 
-			component := &Component{Type: "body"}
+			for _, comp := range msg.Templating().Components {
+				// get the variables used by this component in order of their names 1, 2 etc
+				compParams := make([]courier.TemplatingVariable, 0, len(comp.Variables))
+				varNames := maps.Keys(comp.Variables)
+				sort.Strings(varNames)
+				for _, varName := range varNames {
+					compParams = append(compParams, msg.Templating().Variables[comp.Variables[varName]])
+				}
 
-			for _, v := range templating.Variables {
-				component.Parameters = append(component.Parameters, Param{Type: "text", Text: v})
+				if comp.Type == "body" || strings.HasPrefix(comp.Type, "body/") {
+					component := &Component{Type: "body"}
+					for _, p := range compParams {
+						component.Parameters = append(component.Parameters, Param{Type: p.Type, Text: p.Value})
+					}
+					payload.Template.Components = append(payload.Template.Components, *component)
+
+				}
+
 			}
-			payload.Template.Components = append(payload.Template.Components, *component)
 
 			if len(msg.Attachments()) > 0 {
 				mimeType, mediaURL := handlers.SplitAttachment(msg.Attachments()[0])
@@ -919,7 +921,7 @@ func (h *handler) fetchMediaID(msg courier.MsgOut, mimeType, mediaURL string, cl
 	mediaCache := redisx.NewIntervalHash(cacheKey, time.Hour*24, 2)
 	mediaID, err := mediaCache.Get(rc, mediaURL)
 	if err != nil {
-		return "", errors.Wrapf(err, "error reading media id from redis: %s : %s", cacheKey, mediaURL)
+		return "", fmt.Errorf("error reading media id from redis: %s : %s: %w", cacheKey, mediaURL, err)
 	} else if mediaID != "" {
 		return mediaID, nil
 	}
@@ -936,7 +938,7 @@ func (h *handler) fetchMediaID(msg courier.MsgOut, mimeType, mediaURL string, cl
 	// download media
 	req, err := http.NewRequest("GET", mediaURL, nil)
 	if err != nil {
-		return "", errors.Wrapf(err, "error building media request")
+		return "", fmt.Errorf("error building media request: %w", err)
 	}
 
 	resp, respBody, err := h.RequestHTTP(req, clog)
@@ -949,32 +951,36 @@ func (h *handler) fetchMediaID(msg courier.MsgOut, mimeType, mediaURL string, cl
 	baseURL := msg.Channel().StringConfigForKey(courier.ConfigBaseURL, "")
 	url, err := url.Parse(baseURL)
 	if err != nil {
-		return "", errors.Wrapf(err, "invalid base url set for WA channel: %s", baseURL)
+		return "", fmt.Errorf("invalid base url set for WA channel: %s: %w", baseURL, err)
 	}
 	dockerMediaURL, _ := url.Parse("/v1/media")
 
 	req, err = http.NewRequest("POST", dockerMediaURL.String(), bytes.NewReader(respBody))
 	if err != nil {
-		return "", errors.Wrapf(err, "error building request to media endpoint")
+		return "", fmt.Errorf("error building request to media endpoint: %w", err)
 	}
 	setWhatsAppAuthHeader(&req.Header, msg.Channel())
 
 	resp, respBody, err = h.RequestHTTP(req, clog)
 	if err != nil || resp.StatusCode/100 != 2 {
 		failedMediaCache.Set(failKey, true, cache.DefaultExpiration)
-		return "", errors.Wrapf(err, "error uploading media to whatsapp")
+		if err != nil {
+			return "", fmt.Errorf("error uploading media to whatsapp: %w", err)
+		} else {
+			return "", fmt.Errorf("non-200 response uploading media to whatsapp")
+		}
 	}
 
 	// take uploaded media id
 	mediaID, err = jsonparser.GetString(respBody, "media", "[0]", "id")
 	if err != nil {
-		return "", errors.Wrapf(err, "error reading media id from response")
+		return "", fmt.Errorf("error reading media id from response: %w", err)
 	}
 
 	// put in cache
 	err = mediaCache.Set(rc, mediaURL, mediaID)
 	if err != nil {
-		return "", errors.Wrapf(err, "error setting media id in cache")
+		return "", fmt.Errorf("error setting media id in cache: %w", err)
 	}
 
 	return mediaID, nil
@@ -1000,7 +1006,7 @@ func (h *handler) sendWhatsAppMsg(rc redis.Conn, msg courier.MsgOut, sendPath *u
 		// TODO: In the future we should the header value when available
 		rc.Do("EXPIRE", rateLimitKey, 2)
 
-		return "", "", errors.New("received rate-limit response from send endpoint")
+		return "", "", courier.ErrConnectionThrottled
 	}
 
 	errPayload := &mtErrorPayload{}
@@ -1016,14 +1022,13 @@ func (h *handler) sendWhatsAppMsg(rc redis.Conn, msg courier.MsgOut, sendPath *u
 			// We pause the bulk queue for 24 hours and 5min
 			rc.Do("EXPIRE", rateLimitBulkKey, (60*60*24)+(5*60))
 
-			err := errors.Errorf("received error from send endpoint: %s", errPayload.Errors[0].Title)
-			return "", "", err
+			return "", "", courier.ErrConnectionThrottled
 		}
 
 		if !hasWhatsAppContactError(*errPayload) {
-			err := errors.Errorf("received error from send endpoint: %s", errPayload.Errors[0].Title)
-			return "", "", err
+			return "", "", courier.ErrFailedWithReason(strconv.Itoa(errPayload.Errors[0].Code), errPayload.Errors[0].Title)
 		}
+
 		// check contact
 		baseURL := fmt.Sprintf("%s://%s", sendPath.Scheme, sendPath.Host)
 		checkResp, err := h.checkWhatsAppContact(msg.Channel(), baseURL, msg.URN(), clog)
@@ -1082,7 +1087,7 @@ func (h *handler) sendWhatsAppMsg(rc redis.Conn, msg courier.MsgOut, sendPath *u
 
 		retryResp, retryRespBody, err := h.RequestHTTP(reqRetry, clog)
 		if err != nil || retryResp.StatusCode/100 != 2 {
-			return "", "", errors.New("error making retry request")
+			return "", "", courier.ErrResponseStatus
 		}
 		externalID, err := getSendWhatsAppMsgId(retryRespBody)
 		return wppID, externalID, err
@@ -1139,7 +1144,7 @@ func getSendWhatsAppMsgId(resp []byte) (string, error) {
 	if externalID, err := jsonparser.GetString(resp, "messages", "[0]", "id"); err == nil {
 		return externalID, nil
 	} else {
-		return "", errors.Errorf("unable to get message id from response body")
+		return "", courier.ErrResponseUnexpected
 	}
 }
 
@@ -1165,47 +1170,16 @@ func (h *handler) checkWhatsAppContact(channel courier.Channel, baseURL string, 
 		return nil, errors.New("error checking contact")
 	}
 	// check contact status
-	if status, err := jsonparser.GetString(respBody, "contacts", "[0]", "status"); err == nil {
+	status, err := jsonparser.GetString(respBody, "contacts", "[0]", "status")
+	if err != nil {
+		return respBody, courier.ErrResponseUnexpected
+	} else {
 		if status == "valid" {
 			return respBody, nil
 		} else {
-			return respBody, errors.Errorf(`contact status is "%s"`, status)
+			return respBody, courier.ErrResponseUnexpected
 		}
-	} else {
-		return respBody, err
 	}
-}
-
-func (h *handler) getTemplating(msg courier.MsgOut) (*MsgTemplating, error) {
-	if len(msg.Metadata()) == 0 {
-		return nil, nil
-	}
-
-	metadata := &struct {
-		Templating *MsgTemplating `json:"templating"`
-	}{}
-	if err := json.Unmarshal(msg.Metadata(), metadata); err != nil {
-		return nil, err
-	}
-
-	if metadata.Templating == nil {
-		return nil, nil
-	}
-
-	if err := utils.Validate(metadata.Templating); err != nil {
-		return nil, errors.Wrapf(err, "invalid templating definition")
-	}
-
-	return metadata.Templating, nil
-}
-
-type MsgTemplating struct {
-	Template struct {
-		Name string `json:"name" validate:"required"`
-		UUID string `json:"uuid" validate:"required"`
-	} `json:"template" validate:"required,dive"`
-	Namespace string   `json:"namespace"`
-	Variables []string `json:"variables"`
 }
 
 func getSupportedLanguage(lc i18n.Locale) string {
