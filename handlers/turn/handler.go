@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -23,6 +24,7 @@ import (
 	"github.com/patrickmn/go-cache"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
+	"golang.org/x/exp/maps"
 	"golang.org/x/mod/semver"
 )
 
@@ -204,9 +206,9 @@ func (h *handler) receiveEvents(ctx context.Context, channel courier.Channel, w 
 		date := time.Unix(ts, 0).UTC()
 
 		// create our URN
-		urn, err := urns.NewWhatsAppURN(msg.From)
+		urn, err := urns.New(urns.WhatsApp, msg.From)
 		if err != nil {
-			return nil, handlers.WriteAndLogRequestError(ctx, h, channel, w, r, err)
+			return nil, handlers.WriteAndLogRequestError(ctx, h, channel, w, r, errors.New("invalid whatsapp id"))
 		}
 
 		text := ""
@@ -457,7 +459,7 @@ type templatePayload struct {
 			Policy string `json:"policy"`
 			Code   string `json:"code"`
 		} `json:"language"`
-		Components []Component `json:"components"`
+		Components []Component `json:"components,omitempty"`
 	} `json:"template"`
 }
 
@@ -511,24 +513,22 @@ type mtErrorPayload struct {
 const maxMsgLength = 4096
 
 // Send sends the given message, logging any HTTP calls or errors
-func (h *handler) Send(ctx context.Context, msg courier.MsgOut, clog *courier.ChannelLog) (courier.StatusUpdate, error) {
+func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.SendResult, clog *courier.ChannelLog) error {
 	conn := h.Backend().RedisPool().Get()
 	defer conn.Close()
 
 	// get our token
 	token := msg.Channel().StringConfigForKey(courier.ConfigAuthToken, "")
 	if token == "" {
-		return nil, fmt.Errorf("missing token for TRN channel")
+		return courier.ErrChannelConfig
 	}
 
 	urlStr := msg.Channel().StringConfigForKey(courier.ConfigBaseURL, "")
 	url, err := url.Parse(urlStr)
 	if err != nil {
-		return nil, fmt.Errorf("invalid base url set for TRN channel: %s", err)
+		return fmt.Errorf("invalid base url set for TRN channel: %s", err)
 	}
 	sendPath, _ := url.Parse("/v1/messages")
-
-	status := h.Backend().NewStatusUpdate(msg.Channel(), msg.ID(), courier.MsgStatusErrored, clog)
 
 	var wppID string
 
@@ -536,37 +536,29 @@ func (h *handler) Send(ctx context.Context, msg courier.MsgOut, clog *courier.Ch
 
 	fail := payloads == nil && err != nil
 	if fail {
-		return nil, err
+		return err
 	}
 
-	for i, payload := range payloads {
+	for _, payload := range payloads {
 		externalID := ""
 		wppID, externalID, err = h.sendWhatsAppMsg(conn, msg, sendPath, payload, clog)
 		if err != nil {
-			break
+			return err
 		}
 
-		// if this is our first message, record the external id
-		if i == 0 {
-			status.SetExternalID(externalID)
-		}
+		res.AddExternalID(externalID)
 	}
 
 	// we are wired it there were no errors
 	if err == nil {
 		// so update contact URN if wppID != ""
 		if wppID != "" {
-			newURN, _ := urns.NewWhatsAppURN(wppID)
-			err = status.SetURNUpdate(msg.URN(), newURN)
-
-			if err != nil {
-				clog.RawError(err)
-			}
+			newURN, _ := urns.New(urns.WhatsApp, wppID)
+			res.SetNewURN(newURN)
 		}
-		status.SetStatus(courier.MsgStatusWired)
 	}
 
-	return status, nil
+	return nil
 }
 
 // WriteRequestError writes the passed in error to our response writer
@@ -735,8 +727,8 @@ func buildPayloads(msg courier.MsgOut, h *handler, clog *courier.ChannelLog) ([]
 		}
 
 	} else {
-		if templating != nil {
-			namespace := templating.Namespace
+		if msg.Templating() != nil {
+			namespace := msg.Templating().Namespace
 			if namespace == "" {
 				namespace = msg.Channel().StringConfigForKey(configNamespace, "")
 			}
@@ -750,63 +742,60 @@ func buildPayloads(msg courier.MsgOut, h *handler, clog *courier.ChannelLog) ([]
 					Type: "hsm",
 				}
 				payload.HSM.Namespace = namespace
-				payload.HSM.ElementName = templating.Template.Name
+				payload.HSM.ElementName = msg.Templating().Template.Name
 				payload.HSM.Language.Policy = "deterministic"
 				payload.HSM.Language.Code = langCode
-				for _, v := range templating.Variables {
-					payload.HSM.LocalizableParams = append(payload.HSM.LocalizableParams, LocalizableParam{Default: v})
+				for _, v := range msg.Templating().Variables {
+					payload.HSM.LocalizableParams = append(payload.HSM.LocalizableParams, LocalizableParam{Default: v.Value})
 				}
 				payloads = append(payloads, payload)
 			} else {
-
 				payload := templatePayload{
 					To:   msg.URN().Path(),
 					Type: "template",
 				}
 				payload.Template.Namespace = namespace
-				payload.Template.Name = templating.Template.Name
+				payload.Template.Name = msg.Templating().Template.Name
 				payload.Template.Language.Policy = "deterministic"
 				payload.Template.Language.Code = langCode
 
-				component := &Component{Type: "body"}
+				for _, comp := range msg.Templating().Components {
+					compParams := make([]courier.TemplatingVariable, 0, len(comp.Variables))
+					varNames := maps.Keys(comp.Variables)
+					sort.Strings(varNames)
+					for _, varName := range varNames {
+						compParams = append(compParams, msg.Templating().Variables[comp.Variables[varName]])
+					}
 
-				for _, v := range templating.Variables {
-					component.Parameters = append(component.Parameters, Param{Type: "text", Text: v})
+					if comp.Type == "body" || strings.HasPrefix(comp.Type, "body/") {
+						component := &Component{Type: "body"}
+						for _, p := range compParams {
+							component.Parameters = append(component.Parameters, Param{Type: p.Type, Text: p.Value})
+						}
+						payload.Template.Components = append(payload.Template.Components, *component)
+					}
 				}
-				payload.Template.Components = append(payload.Template.Components, *component)
 
 				if len(msg.Attachments()) > 0 {
-
-					header := &Component{Type: "header"}
-
 					mimeType, mediaURL := handlers.SplitAttachment(msg.Attachments()[0])
-					mediaID, err := h.fetchMediaID(msg, mimeType, mediaURL, clog)
-					if err != nil {
-						logrus.WithField("channel_uuid", msg.Channel().UUID()).WithError(err).Error("error while uploading media to whatsapp")
-					}
-					if err == nil && mediaID != "" {
-						mediaURL = ""
-					}
-					mimeType = strings.Split(mimeType, "/")[0]
-					if mimeType == "application" {
-						mimeType = "document"
+					headerComponent := Component{Type: "header"}
+					param := Param{}
+
+					if strings.HasPrefix(mimeType, "image") {
+						param.Type = "image"
+						param.Image = &mediaObject{Link: mediaURL}
+					} else if strings.HasPrefix(mimeType, "video") {
+						param.Type = "video"
+						param.Video = &mediaObject{Link: mediaURL}
+					} else if strings.HasPrefix(mimeType, "application") {
+						param.Type = "document"
+						param.Document = &mediaObject{Link: mediaURL}
 					}
 
-					media := mediaObject{ID: mediaID, Link: mediaURL}
-					if mimeType == "image" {
-						header.Parameters = append(header.Parameters, Param{Type: "image", Image: &media})
-					} else if mimeType == "video" {
-						header.Parameters = append(header.Parameters, Param{Type: "video", Video: &media})
-					} else if mimeType == "document" {
-						media.Filename, err = utils.BasePathForURL(mediaURL)
-						if err != nil {
-							return nil, err
-						}
-						header.Parameters = append(header.Parameters, Param{Type: "document", Document: &media})
-					} else {
-						return nil, fmt.Errorf("unknown attachment mime type: %s", mimeType)
+					if param.Type != "" {
+						headerComponent.Parameters = []Param{param}
+						payload.Template.Components = append(payload.Template.Components, headerComponent)
 					}
-					payload.Template.Components = append(payload.Template.Components, *header)
 				}
 
 				payloads = append(payloads, payload)
@@ -1010,7 +999,7 @@ func (h *handler) sendWhatsAppMsg(rc redis.Conn, msg courier.MsgOut, sendPath *u
 		// TODO: In the future we should the header value when available
 		rc.Do("EXPIRE", rateLimitKey, 2)
 
-		return "", "", errors.New("received rate-limit response from send endpoint")
+		return "", "", courier.ErrConnectionThrottled
 	}
 
 	errPayload := &mtErrorPayload{}
@@ -1026,13 +1015,11 @@ func (h *handler) sendWhatsAppMsg(rc redis.Conn, msg courier.MsgOut, sendPath *u
 			// We pause the bulk queue for 24 hours and 5min
 			rc.Do("EXPIRE", rateLimitBulkKey, (60*60*24)+(5*60))
 
-			err := errors.Errorf("received error from send endpoint: %s", errPayload.Errors[0].Title)
-			return "", "", err
+			return "", "", courier.ErrConnectionThrottled
 		}
 
 		if !hasWhatsAppContactError(*errPayload) {
-			err := errors.Errorf("received error from send endpoint: %s", errPayload.Errors[0].Title)
-			return "", "", err
+			return "", "", courier.ErrFailedWithReason(strconv.Itoa(errPayload.Errors[0].Code), errPayload.Errors[0].Title)
 		}
 		// check contact
 		baseURL := fmt.Sprintf("%s://%s", sendPath.Scheme, sendPath.Host)
@@ -1096,7 +1083,7 @@ func (h *handler) sendWhatsAppMsg(rc redis.Conn, msg courier.MsgOut, sendPath *u
 
 		retryResp, retryRespBody, err := h.RequestHTTP(reqRetry, clog)
 		if err != nil || retryResp.StatusCode/100 != 2 {
-			return "", "", errors.New("error making retry request")
+			return "", "", courier.ErrResponseStatus
 		}
 		externalID, err := getSendWhatsAppMsgId(retryRespBody)
 		return wppID, externalID, err
@@ -1148,7 +1135,7 @@ func getSendWhatsAppMsgId(resp []byte) (string, error) {
 	if externalID, err := jsonparser.GetString(resp, "messages", "[0]", "id"); err == nil {
 		return externalID, nil
 	} else {
-		return "", errors.Errorf("unable to get message id from response body")
+		return "", courier.ErrResponseUnexpected
 	}
 }
 
@@ -1178,15 +1165,14 @@ func (h *handler) checkWhatsAppContact(channel courier.Channel, baseURL string, 
 		return nil, errors.New("error checking contact")
 	}
 	// check contact status
-	if status, err := jsonparser.GetString(respBody, "contacts", "[0]", "status"); err == nil {
-		if status == "valid" {
-			return respBody, nil
-		} else {
-			return respBody, errors.Errorf(`contact status is "%s"`, status)
-		}
-	} else {
-		return respBody, err
+	status, err := jsonparser.GetString(respBody, "contacts", "[0]", "status")
+	if err != nil {
+		return respBody, courier.ErrResponseUnexpected
 	}
+	if status == "valid" {
+		return respBody, nil
+	}
+	return respBody, courier.ErrResponseUnexpected
 }
 
 func (h *handler) getTemplating(msg courier.MsgOut) (*MsgTemplating, error) {

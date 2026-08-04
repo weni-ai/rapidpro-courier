@@ -73,11 +73,12 @@ type JwtTokenValidator struct {
 // teamsServiceURLPrefix is the in-path marker that separates the conversation
 // id from the bot service URL inside the teams URN path.
 const teamsServiceURLPrefix = ":serviceURL:"
+const teamsScheme = "teams"
 
 // newTeamsURN builds a teams URN without going through gocommon's broken
 // regex validation (which rejects valid Microsoft Teams conversation IDs).
 func newTeamsURN(identifier string) urns.URN {
-	return urns.URN(urns.TeamsScheme + ":" + identifier)
+	return urns.URN(teamsScheme + ":" + identifier)
 }
 
 // teamsServiceURL extracts the bot service URL from a teams URN. Replaces
@@ -343,14 +344,11 @@ type Activity struct {
 	Timestamp    string              `json:"timestamp,omitempty"`
 }
 
-func (h *handler) Send(ctx context.Context, msg courier.MsgOut, clog *courier.ChannelLog) (courier.StatusUpdate, error) {
-
+func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.SendResult, clog *courier.ChannelLog) error {
 	token := msg.Channel().StringConfigForKey(courier.ConfigAuthToken, "")
 	if token == "" {
-		return nil, fmt.Errorf("missing token for TM channel")
+		return courier.ErrChannelConfig
 	}
-
-	status := h.Backend().NewStatusUpdate(msg.Channel(), msg.ID(), courier.MsgStatusErrored, clog)
 
 	payload := Activity{}
 
@@ -375,29 +373,28 @@ func (h *handler) Send(ctx context.Context, msg courier.MsgOut, clog *courier.Ch
 
 	jsonBody, err := json.Marshal(payload)
 	if err != nil {
-		return status, err
+		return err
 	}
 
 	req, err := http.NewRequest(http.MethodPost, msgURL, bytes.NewReader(jsonBody))
-
 	if err != nil {
-		return status, err
+		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
 
 	_, respBody, err := h.RequestHTTP(req, clog)
 	if err != nil {
-		return status, err
+		return err
 	}
-	status.SetStatus(courier.MsgStatusWired)
+
 	externalID, err := jsonparser.GetString(respBody, "id")
 	if err != nil {
 		logrus.WithError(errors.Errorf("unable to get message_id from body"))
-		return status, nil
+		return nil
 	}
-	status.SetExternalID(externalID)
-	return status, nil
+	res.AddExternalID(externalID)
+	return nil
 }
 
 func (h *handler) DescribeURN(ctx context.Context, channel courier.Channel, urn urns.URN, clog *courier.ChannelLog) (map[string]string, error) {
