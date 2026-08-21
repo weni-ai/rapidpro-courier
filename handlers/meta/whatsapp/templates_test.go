@@ -151,8 +151,43 @@ func TestGetTemplatePayload(t *testing.T) {
 				Language: &whatsapp.Language{Policy: "deterministic", Code: "en"},
 				Components: []*whatsapp.Component{
 					{Type: "header", Params: []*whatsapp.Param{{Type: "document", Document: &struct {
-						Link string "json:\"link,omitempty\""
-					}{Link: "http://example.com/doc.pdf"}}}},
+						Link     string "json:\"link,omitempty\""
+						Filename string `json:"filename,omitempty"`
+					}{Link: "http://example.com/doc.pdf", Filename: "doc.pdf"}}}},
+					{Type: "body", Params: []*whatsapp.Param{{Type: "text", Text: "Hello"}, {Type: "text", Text: "Bob"}}},
+				},
+			},
+		},
+		{
+			templating: `{
+				"template": {"uuid": "4ed5000f-5c94-4143-9697-b7cbd230a381", "name": "Update"},
+				"language": "en",
+				"components": [
+					{
+						"type": "header",
+						"name": "header",
+						"variables": {"1": 0}
+					},
+					{
+						"type": "body",
+						"name": "body",
+						"variables": {"1": 1, "2": 2}
+					}
+				],
+				"variables": [
+					{"type": "document", "value": "document:http://example.com/doc.pdf"},
+					{"type": "text", "value": "Hello"},
+					{"type": "text", "value": "Bob"}
+				]
+			}`,
+			expected: &whatsapp.Template{
+				Name:     "Update",
+				Language: &whatsapp.Language{Policy: "deterministic", Code: "en"},
+				Components: []*whatsapp.Component{
+					{Type: "header", Params: []*whatsapp.Param{{Type: "document", Document: &struct {
+						Link     string "json:\"link,omitempty\""
+						Filename string `json:"filename,omitempty"`
+					}{Link: "http://example.com/doc.pdf", Filename: "doc.pdf"}}}},
 					{Type: "body", Params: []*whatsapp.Param{{Type: "text", Text: "Hello"}, {Type: "text", Text: "Bob"}}},
 				},
 			},
