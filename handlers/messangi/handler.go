@@ -28,18 +28,45 @@ func newHandler() courier.ChannelHandler {
 	return &handler{handlers.NewBaseHandler(models.ChannelType("MG"), "Messangi")}
 }
 
+// flexibleString unmarshals a JSON string or number into a string.
+// Messangi sends processId as either type depending on the API.
+type flexibleString string
+
+func (s *flexibleString) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		*s = ""
+		return nil
+	}
+
+	if len(data) > 0 && data[0] == '"' {
+		var v string
+		if err := json.Unmarshal(data, &v); err != nil {
+			return err
+		}
+		*s = flexibleString(v)
+		return nil
+	}
+
+	var n json.Number
+	if err := json.Unmarshal(data, &n); err != nil {
+		return fmt.Errorf("cannot unmarshal %s into string", data)
+	}
+	*s = flexibleString(n.String())
+	return nil
+}
+
 type moPayload struct {
-	Owner      string `json:"owner"`
-	Date       string `json:"date"`
-	ProcessID  string `json:"processId"`
-	Origin     string `json:"origin"`
-	ExternalID string `json:"externalId"`
-	Callback   string `json:"callback"`
-	Connection string `json:"connection"`
-	ID         string `json:"id"`
-	Text       string `json:"text"`
-	User       string `json:"user"`
-	ExtraInfo  any    `json:"extraInfo"`
+	Owner      string         `json:"owner"`
+	Date       string         `json:"date"`
+	ProcessID  flexibleString `json:"processId"`
+	Origin     string         `json:"origin"`
+	ExternalID string         `json:"externalId"`
+	Callback   string         `json:"callback"`
+	Connection string         `json:"connection"`
+	ID         string         `json:"id"`
+	Text       string         `json:"text"`
+	User       string         `json:"user"`
+	ExtraInfo  any            `json:"extraInfo"`
 }
 
 // Initialize is called by the engine once everything is loaded

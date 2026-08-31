@@ -1,6 +1,7 @@
 package messangi
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/nyaruka/courier"
@@ -10,6 +11,7 @@ import (
 	"github.com/nyaruka/courier/utils/clogs"
 	"github.com/nyaruka/gocommon/httpx"
 	"github.com/nyaruka/gocommon/urns"
+	"github.com/stretchr/testify/assert"
 )
 
 var testChannels = []courier.Channel{
@@ -35,6 +37,26 @@ var testCases = []IncomingTestCase{
 		ExpectedExternalID:   "usuario_456",
 	},
 	{
+		Label:                "Receive Valid Numeric ProcessID",
+		URL:                  receiveURL,
+		Data:                 `{"owner":"unicef","date":"2026-08-31T12:37:56.844453949Z","processId":11685,"origin":"18768384897","externalId":null,"callback":"https://rapidpro.ilhasoft.mobi/c/mg/8eb23e93-5ecb-45ba-b726-3b064e0c56ab/receive","connection":"MSGI_PROD_FlowManuId","id":"4eccf3ac21514a21888d4e67216850df","text":"d","user":"+5588999999999","extraInfo":null}`,
+		ExpectedRespStatus:   200,
+		ExpectedBodyContains: "Message Accepted",
+		ExpectedMsgText:      Sp("d"),
+		ExpectedURN:          "tel:+5588999999999",
+		ExpectedExternalID:   "4eccf3ac21514a21888d4e67216850df",
+	},
+	{
+		Label:                "Receive Valid Null ProcessID",
+		URL:                  receiveURL,
+		Data:                 `{"owner":"empresa","date":"2025-05-23T14:30:00Z","processId":null,"origin":"12345","externalId":null,"callback":"https://suaapi.com/messangi/mo","connection":"SMS","id":"usuario_456","text":"Olá, quero participar","user":"+5588999999999","extraInfo":null}`,
+		ExpectedRespStatus:   200,
+		ExpectedBodyContains: "Message Accepted",
+		ExpectedMsgText:      Sp("Olá, quero participar"),
+		ExpectedURN:          "tel:+5588999999999",
+		ExpectedExternalID:   "usuario_456",
+	},
+	{
 		Label:                "Receive Missing User",
 		URL:                  receiveURL,
 		Data:                 `{"text":"Hello"}`,
@@ -52,6 +74,31 @@ var testCases = []IncomingTestCase{
 
 func TestIncoming(t *testing.T) {
 	RunIncomingTestCases(t, testChannels, newHandler(), testCases)
+}
+
+func TestFlexibleStringUnmarshal(t *testing.T) {
+	tests := []struct {
+		json     string
+		expected flexibleString
+		wantErr  bool
+	}{
+		{`"abc123"`, "abc123", false},
+		{`11685`, "11685", false},
+		{`null`, "", false},
+		{`true`, "", true},
+		{`{}`, "", true},
+	}
+
+	for _, tc := range tests {
+		var got flexibleString
+		err := json.Unmarshal([]byte(tc.json), &got)
+		if tc.wantErr {
+			assert.Error(t, err, "json %s", tc.json)
+			continue
+		}
+		assert.NoError(t, err, "json %s", tc.json)
+		assert.Equal(t, tc.expected, got, "json %s", tc.json)
+	}
 }
 
 var defaultSendTestCases = []OutgoingTestCase{
