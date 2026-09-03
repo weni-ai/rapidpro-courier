@@ -503,7 +503,7 @@ func (b *backend) ClearMsgSent(ctx context.Context, uuid models.MsgUUID) error {
 }
 
 // OnSendComplete is called when the sender has finished trying to send a message
-func (b *backend) OnSendComplete(ctx context.Context, msg courier.MsgOut, status courier.StatusUpdate, clog *courier.ChannelLog) {
+func (b *backend) OnSendComplete(ctx context.Context, msg courier.MsgOut, status courier.StatusUpdate, clog *courier.ChannelLog, newURN urns.URN) {
 	log := slog.With("channel", msg.Channel().UUID(), "msg", msg.UUID(), "clog", clog.UUID, "status", status)
 
 	rc := b.rt.VK.Get()
@@ -527,6 +527,19 @@ func (b *backend) OnSendComplete(ctx context.Context, msg courier.MsgOut, status
 	if wasSuccess && m.Session_ != nil && m.Session_.Timeout > 0 {
 		if err := b.insertTimeoutFire(ctx, m); err != nil {
 			log.Error("unable to update session timeout", "error", err, "session_uuid", m.Session_.UUID)
+		}
+	}
+
+	if wasSuccess && urns.IsWhatsAppBSUID(newURN) && newURN != msg.URN() && !msg.Contact().HasOtherURN(newURN) {
+		dbChannel := msg.Channel().(*models.Channel)
+		if err := queueMailroomTask(ctx, rc, "contact_changed", dbChannel.OrgID_, msg.Contact().ID, map[string]any{
+			"channel_id": dbChannel.ID_,
+			"new_urn": map[string]string{
+				"value":  string(newURN),
+				"action": "append",
+			},
+		}); err != nil {
+			log.Error("unable to queue contact_changed task", "error", err, "urn", newURN)
 		}
 	}
 

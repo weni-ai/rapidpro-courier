@@ -160,3 +160,69 @@ func contactForURN(ctx context.Context, b *backend, org models.OrgID, channel *m
 
 	return contact, nil
 }
+
+// contactForMsg resolves the contact for an incoming message. Normally that's a lookup by (or creation from) the
+// message's primary URN. But when a WhatsApp message arrives with a phone number as its primary URN and a
+// business-scoped user ID attached as its new URN, and the phone number doesn't match an existing contact, we also
+// look for one by the BSUID so a contact created while the phone was omitted is reused rather than duplicated.
+func contactForMsg(ctx context.Context, b *backend, m *MsgIn, clog *courier.ChannelLog) (*models.Contact, error) {
+	altURN := altLookupURN(m)
+
+	if altURN == urns.NilURN {
+		return contactForURN(ctx, b, m.OrgID_, m.channel, m.URN_, m.URNAuthTokens_, m.ContactName_, true, clog)
+	}
+
+	contact, err := contactForURN(ctx, b, m.OrgID_, m.channel, m.URN_, m.URNAuthTokens_, m.ContactName_, false, clog)
+	if err != nil || contact != nil {
+		return contact, err
+	}
+
+	contact, err = contactForURN(ctx, b, m.OrgID_, m.channel, altURN, nil, "", false, clog)
+	if err != nil {
+		return nil, err
+	}
+	if contact != nil {
+		added, err := addContactURN(ctx, b, m.channel, contact, m.URN_, m.URNAuthTokens_)
+		if err != nil {
+			return nil, err
+		}
+		if !added {
+			return contactForMsg(ctx, b, m, clog)
+		}
+		return contact, nil
+	}
+
+	return contactForURN(ctx, b, m.OrgID_, m.channel, m.URN_, m.URNAuthTokens_, m.ContactName_, true, clog)
+}
+
+func altLookupURN(m *MsgIn) urns.URN {
+	if m.NewURN_ != nil && m.URN_.Scheme() == urns.WhatsApp.Prefix && urns.IsWhatsAppBSUID(m.NewURN_.Value) {
+		return m.NewURN_.Value
+	}
+	return urns.NilURN
+}
+
+func addContactURN(ctx context.Context, b *backend, channel *models.Channel, contact *models.Contact, urn urns.URN, authTokens map[string]string) (bool, error) {
+	tx, err := b.rt.DB.BeginTxx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("error beginning transaction: %w", err)
+	}
+
+	contactURN, err := models.GetOrCreateContactURN(ctx, tx, channel, contact.ID_, urn, authTokens)
+	if err != nil {
+		tx.Rollback()
+		return false, fmt.Errorf("error adding URN to contact: %w", err)
+	}
+
+	if contactURN.PrevContactID != models.NilContactID {
+		tx.Rollback()
+		return false, nil
+	}
+
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("error committing transaction: %w", err)
+	}
+
+	contact.URNID_ = contactURN.ID
+	return true, nil
+}
