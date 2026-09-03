@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -21,14 +22,15 @@ import (
 	"github.com/nyaruka/courier/handlers/meta/messenger"
 	"github.com/nyaruka/courier/handlers/meta/whatsapp"
 	"github.com/nyaruka/courier/utils"
+	"github.com/nyaruka/courier/utils/clogs"
 	"github.com/nyaruka/gocommon/jsonx"
 	"github.com/nyaruka/gocommon/urns"
 )
 
 // Endpoints we hit
 var (
-	sendURL  = "https://graph.facebook.com/v17.0/me/messages"
-	graphURL = "https://graph.facebook.com/v17.0/"
+	sendURL  = "https://graph.facebook.com/v18.0/me/messages"
+	graphURL = "https://graph.facebook.com/v18.0/"
 
 	signatureHeader = "X-Hub-Signature-256"
 
@@ -52,6 +54,8 @@ var (
 		"account":  "ACCOUNT_UPDATE",
 		"agent":    "HUMAN_AGENT",
 	}
+
+	wacThrottlingErrorCodes = []int{4, 80007, 130429, 131048, 131056, 133016}
 )
 
 var maxMsgLength = maxMsgLengthFBA
@@ -613,10 +617,9 @@ func (h *handler) processFacebookInstagramPayload(ctx context.Context, channel c
 					continue
 				}
 
-				if att.Payload != nil && att.Payload.URL != "" && att.Type != "fallback" {
+				if att.Payload != nil && att.Payload.URL != "" && att.Type != "fallback" && strings.HasPrefix(att.Payload.URL, "http") {
 					attachmentURLs = append(attachmentURLs, att.Payload.URL)
 				}
-
 			}
 
 			// if we have no text or accepted attachments, don't create a message
@@ -750,7 +753,7 @@ func (h *handler) sendFacebookInstagramMsg(ctx context.Context, msg courier.MsgO
 			payload.Message.Attachment = &messenger.Attachment{}
 			attType, attURL := handlers.SplitAttachment(part.Attachment)
 			attType = strings.Split(attType, "/")[0]
-			if attType == "application" {
+			if attType == "application" || attType == "document" {
 				attType = "file"
 			}
 			payload.Message.Attachment.Type = attType
@@ -899,7 +902,7 @@ func (h *handler) sendWhatsAppMsg(ctx context.Context, msg courier.MsgOut, res *
 
 							// if we have more than 10 quick replies, truncate and add channel error
 							if len(qrs) > 10 {
-								clog.Error(courier.NewChannelError("", "", "too many quick replies WAC supports only up to 10 quick replies"))
+								clog.Error(clogs.NewLogError("", "", "too many quick replies WAC supports only up to 10 quick replies"))
 								qrs = qrs[:10]
 							}
 
@@ -997,7 +1000,7 @@ func (h *handler) sendWhatsAppMsg(ctx context.Context, msg courier.MsgOut, res *
 
 					// if we have more than 10 quick replies, truncate and add channel error
 					if len(qrs) > 10 {
-						clog.Error(courier.NewChannelError("", "", "too many quick replies WAC supports only up to 10 quick replies"))
+						clog.Error(clogs.NewLogError("", "", "too many quick replies WAC supports only up to 10 quick replies"))
 						qrs = qrs[:10]
 					}
 
@@ -1151,6 +1154,10 @@ func (h *handler) requestWAC(payload whatsapp.SendRequest, accessToken string, r
 	err = json.Unmarshal(respBody, respPayload)
 	if err != nil {
 		return courier.ErrResponseUnparseable
+	}
+
+	if slices.Contains(wacThrottlingErrorCodes, respPayload.Error.Code) {
+		return courier.ErrConnectionThrottled
 	}
 
 	if respPayload.Error.Code != 0 {
