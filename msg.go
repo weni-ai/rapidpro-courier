@@ -124,4 +124,6 @@ type MsgIn interface {
 	WithContactName(name string) MsgIn
 	WithURNAuthTokens(tokens map[string]string) MsgIn
 	WithReceivedOn(date time.Time) MsgIn
+	WithNewURN(urn urns.URN) MsgIn
+	NewURN() urns.URN
 }

@@ -304,6 +304,7 @@ func (w *Sender) sendMessage(msg MsgOut) {
 	}
 
 	var status StatusUpdate
+	var newURN urns.URN
 	var redactValues []string
 	handler := server.GetHandler(msg.Channel())
 	if handler != nil {
@@ -323,7 +324,7 @@ func (w *Sender) sendMessage(msg MsgOut) {
 		log.Warn("duplicate send, marking as wired")
 
 	} else {
-		status = w.sendByHandler(sendCTX, handler, msg, clog, log)
+		status, newURN = w.sendByHandler(sendCTX, handler, msg, clog, log)
 	}
 
 	// we allot 10 seconds to write our status to the db
@@ -344,10 +345,10 @@ func (w *Sender) sendMessage(msg MsgOut) {
 	}
 
 	// mark our send task as complete
-	backend.OnSendComplete(writeCTX, msg, status, clog)
+	backend.OnSendComplete(writeCTX, msg, status, clog, newURN)
 }
 
-func (w *Sender) sendByHandler(ctx context.Context, h ChannelHandler, m MsgOut, clog *ChannelLog, log *slog.Logger) StatusUpdate {
+func (w *Sender) sendByHandler(ctx context.Context, h ChannelHandler, m MsgOut, clog *ChannelLog, log *slog.Logger) (StatusUpdate, urns.URN) {
 	backend := w.foreman.server.Backend()
 	res := &SendResult{newURN: urns.NilURN}
 	err := h.Send(ctx, m, res, clog)
@@ -359,7 +360,8 @@ func (w *Sender) sendByHandler(ctx context.Context, h ChannelHandler, m MsgOut, 
 		status.SetExternalID(res.ExternalIDs()[0])
 	}
 
-	if res.newURN != urns.NilURN {
+	// phone-number swaps (e.g. 9th digit) still use URN update; a WhatsApp BSUID is appended via contact_changed
+	if res.newURN != urns.NilURN && !urns.IsWhatsAppBSUID(res.newURN) {
 		urnErr := status.SetURNUpdate(m.URN(), res.newURN)
 		if urnErr != nil {
 			clog.RawError(urnErr)
@@ -395,5 +397,5 @@ func (w *Sender) sendByHandler(ctx context.Context, h ChannelHandler, m MsgOut, 
 		clog.Error(clogs.NewLogError("internal_error", "", "An internal error occured."))
 	}
 
-	return status
+	return status, res.GetNewURN()
 }
