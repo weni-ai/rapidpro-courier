@@ -1,6 +1,11 @@
 package whatsapp
 
-import "github.com/nyaruka/courier"
+import (
+	"fmt"
+
+	"github.com/nyaruka/courier"
+	"github.com/nyaruka/gocommon/urns"
+)
 
 // see https://developers.facebook.com/docs/whatsapp/cloud-api/webhooks/payload-examples#message-status-updates
 var StatusMapping = map[string]courier.MsgStatus{
@@ -35,14 +40,16 @@ type Change struct {
 			Profile struct {
 				Name string `json:"name"`
 			} `json:"profile"`
-			WaID string `json:"wa_id"`
+			WaID   string `json:"wa_id"`
+			UserID string `json:"user_id"`
 		} `json:"contacts"`
 		Messages []struct {
-			ID        string `json:"id"`
-			From      string `json:"from"`
-			Timestamp string `json:"timestamp"`
-			Type      string `json:"type"`
-			Context   *struct {
+			ID         string `json:"id"`
+			From       string `json:"from"`
+			FromUserID string `json:"from_user_id"`
+			Timestamp  string `json:"timestamp"`
+			Type       string `json:"type"`
+			Context    *struct {
 				Forwarded           bool   `json:"forwarded"`
 				FrequentlyForwarded bool   `json:"frequently_forwarded"`
 				From                string `json:"from"`
@@ -217,7 +224,8 @@ type Interactive struct {
 type SendRequest struct {
 	MessagingProduct string `json:"messaging_product"`
 	RecipientType    string `json:"recipient_type"`
-	To               string `json:"to"`
+	To               string `json:"to,omitempty"`
+	Recipient        string `json:"recipient,omitempty"`
 	Type             string `json:"type"`
 
 	Text *Text `json:"text,omitempty"`
@@ -239,11 +247,58 @@ type SendResponse struct {
 		ID string `json:"id"`
 	} `json:"messages"`
 	Contacts []struct {
-		Input string `json:"input"`
-		WaID  string `json:"wa_id"`
+		Input  string `json:"input"`
+		WaID   string `json:"wa_id"`
+		UserID string `json:"user_id"`
 	} `json:"contacts"`
 	Error struct {
 		Message string `json:"message"`
 		Code    int    `json:"code"`
 	} `json:"error"`
+}
+
+// RecipientFields returns the to and recipient field values for the given URN. A business-scoped user ID
+// (whatsapp URN in the CC.xxx form) goes in the recipient field; a phone number goes in the to field.
+func RecipientFields(urn urns.URN) (to, recipient string) {
+	if urns.IsWhatsAppBSUID(urn) {
+		return "", urn.Path()
+	}
+	return urn.Path(), ""
+}
+
+func NewSendRequest(msg courier.MsgOut) SendRequest {
+	to, recipient := RecipientFields(msg.URN())
+	return SendRequest{MessagingProduct: "whatsapp", RecipientType: "individual", To: to, Recipient: recipient}
+}
+
+// Identifier returns From if present, otherwise FromUserID (WhatsApp BSUID when the phone is omitted).
+func Identifier(from, fromUserID string) string {
+	if from != "" {
+		return from
+	}
+	return fromUserID
+}
+
+// UserID returns the user_id from the first contact in the send response if present.
+func (r *SendResponse) UserID() string {
+	if len(r.Contacts) > 0 {
+		return r.Contacts[0].UserID
+	}
+	return ""
+}
+
+// AttachUserID appends a WhatsApp BSUID as a secondary URN on the incoming message when it is valid and
+// different from the primary URN. Malformed IDs are ignored (caller logs the error).
+func AttachUserID(event courier.MsgIn, primary urns.URN, userID string) error {
+	if userID == "" {
+		return nil
+	}
+	userIDURN, err := urns.New(urns.WhatsApp, userID)
+	if err != nil {
+		return fmt.Errorf("invalid user_id for whatsapp URN: %w", err)
+	}
+	if userIDURN != primary {
+		event.WithNewURN(userIDURN)
+	}
+	return nil
 }

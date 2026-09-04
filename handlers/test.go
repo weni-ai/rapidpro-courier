@@ -70,6 +70,7 @@ type IncomingTestCase struct {
 	ExpectedStatuses      []ExpectedStatus
 	ExpectedEvents        []ExpectedEvent
 	ExpectedErrors        []*clogs.LogError
+	ExpectedNewURN        string
 	NoLogsExpected        bool
 }
 
@@ -185,6 +186,7 @@ func RunIncomingTestCases(t *testing.T, channels []courier.Channel, handler cour
 					assert.Equal(t, tc.ExpectedExternalID, msg.ExternalID())
 				}
 				assert.Equal(t, tc.ExpectedURN, msg.URN())
+				assert.Equal(t, urns.URN(tc.ExpectedNewURN), msg.NewURN())
 			} else {
 				assert.Empty(t, mb.WrittenMsgs(), "unexpected msg written")
 			}

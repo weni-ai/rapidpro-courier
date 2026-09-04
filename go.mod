@@ -96,3 +96,5 @@ require (
 	gopkg.in/go-playground/assert.v1 v1.2.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+replace github.com/nyaruka/gocommon => github.com/weni-ai/rapidpro-gocommon v0.0.0-20260904182226-434b8259577c

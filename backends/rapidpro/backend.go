@@ -348,7 +348,7 @@ func (b *backend) GetChannelByAddress(ctx context.Context, typ courier.ChannelTy
 // GetContact returns the contact for the passed in channel and URN
 func (b *backend) GetContact(ctx context.Context, c courier.Channel, urn urns.URN, authTokens map[string]string, name string, clog *courier.ChannelLog) (courier.Contact, error) {
 	dbChannel := c.(*Channel)
-	return contactForURN(ctx, b, dbChannel.OrgID_, dbChannel, urn, authTokens, name, clog)
+	return contactForURN(ctx, b, dbChannel.OrgID_, dbChannel, urn, authTokens, name, true, clog)
 }
 
 // AddURNtoContact adds a URN to the passed in contact
@@ -496,7 +496,7 @@ func (b *backend) ClearMsgSent(ctx context.Context, id courier.MsgID) error {
 }
 
 // OnSendComplete is called when the sender has finished trying to send a message
-func (b *backend) OnSendComplete(ctx context.Context, msg courier.MsgOut, status courier.StatusUpdate, clog *courier.ChannelLog) {
+func (b *backend) OnSendComplete(ctx context.Context, msg courier.MsgOut, status courier.StatusUpdate, clog *courier.ChannelLog, newURN urns.URN) {
 	rc := b.rp.Get()
 	defer rc.Close()
 
@@ -518,6 +518,21 @@ func (b *backend) OnSendComplete(ctx context.Context, msg courier.MsgOut, status
 	if wasSuccess && dbMsg.SessionWaitStartedOn_ != nil {
 		if err := updateSessionTimeout(ctx, b, dbMsg.SessionID_, *dbMsg.SessionWaitStartedOn_, dbMsg.SessionTimeout_); err != nil {
 			slog.Error("unable to update session timeout", "error", err, "session_id", dbMsg.SessionID_)
+		}
+	}
+
+	if wasSuccess && urns.IsWhatsAppBSUID(newURN) && newURN != msg.URN() {
+		alreadyHas, err := contactHasURN(ctx, b, dbMsg.OrgID_, dbMsg.ContactID_, newURN)
+		if err != nil {
+			slog.Error("unable to check contact URN", "error", err, "urn", newURN)
+		} else if !alreadyHas {
+			dbChannel := msg.Channel().(*Channel)
+			if err := queueMailroomTask(rc, "contact_changed", dbChannel.OrgID_, dbMsg.ContactID_, map[string]any{
+				"channel_id": dbChannel.ID_,
+				"new_urn":    &NewURNSpec{Value: newURN, Action: "append"},
+			}); err != nil {
+				slog.Error("unable to queue contact_changed task", "error", err, "urn", newURN)
+			}
 		}
 	}
 

@@ -171,7 +171,7 @@ func (mb *MockBackend) ClearMsgSent(ctx context.Context, id courier.MsgID) error
 }
 
 // OnSendComplete marks the passed msg as having been dealt with
-func (mb *MockBackend) OnSendComplete(ctx context.Context, msg courier.MsgOut, s courier.StatusUpdate, clog *courier.ChannelLog) {
+func (mb *MockBackend) OnSendComplete(ctx context.Context, msg courier.MsgOut, s courier.StatusUpdate, clog *courier.ChannelLog, newURN urns.URN) {
 	mb.mutex.Lock()
 	defer mb.mutex.Unlock()
 

@@ -39,6 +39,7 @@ type MockMsg struct {
 
 	receivedOn *time.Time
 	sentOn     *time.Time
+	newURN     urns.URN
 }
 
 func NewMockMsg(id courier.MsgID, uuid courier.MsgUUID, channel courier.Channel, urn urns.URN, text string, attachments []string) *MockMsg {
@@ -91,6 +92,8 @@ func (m *MockMsg) WithURNAuthTokens(tokens map[string]string) courier.MsgIn {
 	return m
 }
 func (m *MockMsg) WithReceivedOn(date time.Time) courier.MsgIn { m.receivedOn = &date; return m }
+func (m *MockMsg) WithNewURN(urn urns.URN) courier.MsgIn       { m.newURN = urn; return m }
+func (m *MockMsg) NewURN() urns.URN                            { return m.newURN }
 
 // used to create outgoing messages for testing
 func (m *MockMsg) WithID(id courier.MsgID) courier.MsgOut              { m.id = id; return m }

@@ -299,7 +299,12 @@ func (h *handler) processWhatsAppPayload(ctx context.Context, channel courier.Ch
 		for _, change := range entry.Changes {
 
 			for _, contact := range change.Value.Contacts {
-				contactNames[contact.WaID] = contact.Profile.Name
+				if contact.WaID != "" {
+					contactNames[contact.WaID] = contact.Profile.Name
+				}
+				if contact.UserID != "" {
+					contactNames[contact.UserID] = contact.Profile.Name
+				}
 			}
 
 			for _, msg := range change.Value.Messages {
@@ -314,7 +319,8 @@ func (h *handler) processWhatsAppPayload(ctx context.Context, channel courier.Ch
 				}
 				date := parseTimestamp(ts)
 
-				urn, err := urns.New(urns.WhatsApp, msg.From)
+				sender := whatsapp.Identifier(msg.From, msg.FromUserID)
+				urn, err := urns.New(urns.WhatsApp, sender)
 				if err != nil {
 					return nil, nil, handlers.WriteAndLogRequestError(ctx, h, channel, w, r, errors.New("invalid whatsapp id"))
 				}
@@ -370,7 +376,7 @@ func (h *handler) processWhatsAppPayload(ctx context.Context, channel courier.Ch
 				}
 
 				// create our message
-				event := h.Backend().NewIncomingMsg(channel, urn, text, msg.ID, clog).WithReceivedOn(date).WithContactName(contactNames[msg.From])
+				event := h.Backend().NewIncomingMsg(channel, urn, text, msg.ID, clog).WithReceivedOn(date).WithContactName(contactNames[sender])
 
 				// we had an error downloading media
 				if err != nil {
@@ -379,6 +385,10 @@ func (h *handler) processWhatsAppPayload(ctx context.Context, channel courier.Ch
 
 				if mediaURL != "" {
 					event.WithAttachment(mediaURL)
+				}
+
+				if urnErr := whatsapp.AttachUserID(event, urn, msg.FromUserID); urnErr != nil {
+					courier.LogRequestError(r, channel, urnErr)
 				}
 
 				err = h.Backend().WriteMsg(ctx, event, clog)
@@ -867,7 +877,7 @@ func (h *handler) sendWhatsAppMsg(ctx context.Context, msg courier.MsgOut, res *
 	var payloadAudio whatsapp.SendRequest
 	// do we have a template?
 	if msg.Templating() != nil {
-		payload := whatsapp.SendRequest{MessagingProduct: "whatsapp", RecipientType: "individual", To: msg.URN().Path()}
+		payload := whatsapp.NewSendRequest(msg)
 		payload.Type = "template"
 		payload.Template = whatsapp.GetTemplatePayload(msg.Templating())
 		err := h.requestWAC(payload, accessToken, res, wacPhoneURL, clog)
@@ -878,7 +888,7 @@ func (h *handler) sendWhatsAppMsg(ctx context.Context, msg courier.MsgOut, res *
 	} else {
 
 		for i := 0; i < len(msgParts)+len(msg.Attachments()); i++ {
-			payload := whatsapp.SendRequest{MessagingProduct: "whatsapp", RecipientType: "individual", To: msg.URN().Path()}
+			payload := whatsapp.NewSendRequest(msg)
 
 			if len(msg.Attachments()) == 0 {
 				// do we have a template?
@@ -1057,7 +1067,9 @@ func (h *handler) sendWhatsAppMsg(ctx context.Context, msg courier.MsgOut, res *
 								}{Type: "document", Document: &document}
 							} else if attType == "audio" {
 
-								payloadAudio = whatsapp.SendRequest{MessagingProduct: "whatsapp", RecipientType: "individual", To: msg.URN().Path(), Type: "audio", Audio: &whatsapp.Media{Link: attURL}}
+								payloadAudio = whatsapp.NewSendRequest(msg)
+								payloadAudio.Type = "audio"
+								payloadAudio.Audio = &whatsapp.Media{Link: attURL}
 								err := h.requestWAC(payloadAudio, accessToken, res, wacPhoneURL, clog)
 								if err != nil {
 									return err
@@ -1167,6 +1179,12 @@ func (h *handler) requestWAC(payload whatsapp.SendRequest, accessToken string, r
 	externalID := respPayload.Messages[0].ID
 	if externalID != "" {
 		res.AddExternalID(externalID)
+	}
+
+	if userID := respPayload.UserID(); userID != "" {
+		if userIDURN, urnErr := urns.New(urns.WhatsApp, userID); urnErr == nil {
+			res.SetNewURN(userIDURN)
+		}
 	}
 	return nil
 }
