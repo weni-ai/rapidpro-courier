@@ -368,7 +368,7 @@ func (w *Sender) sendByHandler(ctx context.Context, h ChannelHandler, m MsgOut, 
 	}
 
 	// phone-number swaps (e.g. 9th digit) still use URN update; a WhatsApp BSUID is appended via contact_changed
-	if res.newURN != urns.NilURN && !urns.IsWhatsAppBSUID(res.newURN) {
+	if res.newURN != urns.NilURN && !IsWhatsAppBSUID(res.newURN) {
 		urnErr := status.SetURNUpdate(m.URN(), res.newURN)
 		if urnErr != nil {
 			clog.RawError(urnErr)

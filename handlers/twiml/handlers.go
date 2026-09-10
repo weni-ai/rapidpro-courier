@@ -480,7 +480,7 @@ func (h *handler) parseURN(channel courier.Channel, text string, country i18n.Co
 // whatsAppAddress formats the URN as a Twilio WhatsApp address: whatsapp:+<digits> for a phone
 // number or whatsapp:<CC.xxx> for a business-scoped user ID (no leading +)
 func whatsAppAddress(urn urns.URN) string {
-	if urns.IsWhatsAppBSUID(urn) {
+	if courier.IsWhatsAppBSUID(urn) {
 		return fmt.Sprintf("%s:%s", urns.WhatsApp.Prefix, urn.Path())
 	}
 	return fmt.Sprintf("%s:+%s", urns.WhatsApp.Prefix, urn.Path())

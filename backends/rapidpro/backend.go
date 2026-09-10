@@ -530,7 +530,7 @@ func (b *backend) OnSendComplete(ctx context.Context, msg courier.MsgOut, status
 		}
 	}
 
-	if wasSuccess && urns.IsWhatsAppBSUID(newURN) && newURN != msg.URN() && !msg.Contact().HasOtherURN(newURN) {
+	if wasSuccess && courier.IsWhatsAppBSUID(newURN) && newURN != msg.URN() && !msg.Contact().HasOtherURN(newURN) {
 		dbChannel := msg.Channel().(*models.Channel)
 		if err := queueMailroomTask(ctx, rc, "contact_changed", dbChannel.OrgID_, msg.Contact().ID, map[string]any{
 			"channel_id": dbChannel.ID_,

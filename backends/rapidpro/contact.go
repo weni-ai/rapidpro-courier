@@ -196,7 +196,7 @@ func contactForMsg(ctx context.Context, b *backend, m *MsgIn, clog *courier.Chan
 }
 
 func altLookupURN(m *MsgIn) urns.URN {
-	if m.NewURN_ != nil && m.URN_.Scheme() == urns.WhatsApp.Prefix && urns.IsWhatsAppBSUID(m.NewURN_.Value) {
+	if m.NewURN_ != nil && m.URN_.Scheme() == urns.WhatsApp.Prefix && courier.IsWhatsAppBSUID(m.NewURN_.Value) {
 		return m.NewURN_.Value
 	}
 	return urns.NilURN
