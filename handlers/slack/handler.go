@@ -213,7 +213,7 @@ func (h *handler) sendTextMsgPart(msg courier.MsgOut, token string, clog *courie
 		if err != nil {
 			return courier.ErrResponseUnexpected
 		}
-		clog.Error(clogs.NewLogError("", "", errDescription))
+		clog.Error(clogs.NewLogError("", "", "%s", errDescription))
 		return courier.ErrFailedWithReason("", errDescription)
 	}
 	return nil

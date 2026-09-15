@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -91,6 +92,11 @@ func (h *handler) receiveMessage(ctx context.Context, channel courier.Channel, w
 
 	// if we have a date, parse it
 	date := time.Now()
+
+	// Discord IDs are snowflakes (int64)
+	if _, err := strconv.ParseInt(from, 10, 64); err != nil {
+		return nil, handlers.WriteAndLogRequestError(ctx, h, channel, w, r, fmt.Errorf("invalid discord id"))
+	}
 
 	// create our URN
 	urn, err := urns.Parse(discordPrefix + ":" + from)

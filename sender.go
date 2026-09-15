@@ -379,7 +379,7 @@ func (w *Sender) sendByHandler(ctx context.Context, h ChannelHandler, m MsgOut, 
 			status.SetStatus(MsgStatusFailed)
 		}
 
-		clog.Error(clogs.NewLogError(serr.clogCode, serr.clogExtCode, serr.clogMsg))
+		clog.Error(clogs.NewLogError(serr.clogCode, serr.clogExtCode, "%s", serr.clogMsg))
 
 		// if handler returned ErrContactStopped need to write a stop event
 		if serr == ErrContactStopped {
