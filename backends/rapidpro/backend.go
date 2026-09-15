@@ -22,12 +22,12 @@ import (
 	cwtypes "github.com/aws/aws-sdk-go-v2/service/cloudwatch/types"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/gomodule/redigo/redis"
-	"github.com/jmoiron/sqlx"
 	"github.com/nyaruka/courier"
 	"github.com/nyaruka/courier/queue"
+	"github.com/nyaruka/courier/utils/dynsvc"
 	"github.com/nyaruka/gocommon/aws/cwatch"
-	"github.com/nyaruka/gocommon/aws/dynamo"
 	"github.com/nyaruka/gocommon/aws/s3x"
+	"github.com/vinovest/sqlx"
 	"github.com/nyaruka/gocommon/cache"
 	"github.com/nyaruka/gocommon/dbutil"
 	"github.com/nyaruka/gocommon/httpx"
@@ -60,7 +60,7 @@ type backend struct {
 
 	db     *sqlx.DB
 	rp     *redis.Pool
-	dynamo *dynamo.Service
+	dynamo *dynsvc.Service
 	s3     *s3x.Service
 	cw     *cwatch.Service
 
@@ -174,7 +174,7 @@ func (b *backend) Start() error {
 	}
 
 	// setup DynamoDB
-	b.dynamo, err = dynamo.NewService(b.config.AWSAccessKeyID, b.config.AWSSecretAccessKey, b.config.AWSRegion, b.config.DynamoEndpoint, b.config.DynamoTablePrefix)
+	b.dynamo, err = dynsvc.NewService(b.config.AWSAccessKeyID, b.config.AWSSecretAccessKey, b.config.AWSRegion, b.config.DynamoEndpoint, b.config.DynamoTablePrefix)
 	if err != nil {
 		return err
 	}
@@ -223,14 +223,14 @@ func (b *backend) Start() error {
 	}
 
 	// create our batched writers and start them
-	b.statusWriter = NewStatusWriter(b, b.config.SpoolDir, b.writerWG)
-	b.statusWriter.Start()
+	b.statusWriter = NewStatusWriter(b, b.config.SpoolDir)
+	b.statusWriter.Start(b.writerWG)
 
-	b.dbLogWriter = NewDBLogWriter(b.db, b.writerWG)
-	b.dbLogWriter.Start()
+	b.dbLogWriter = NewDBLogWriter(b.db)
+	b.dbLogWriter.Start(b.writerWG)
 
-	b.dyLogWriter = NewDynamoLogWriter(b.dynamo, b.writerWG)
-	b.dyLogWriter.Start()
+	b.dyLogWriter = NewDynamoLogWriter(b.dynamo)
+	b.dyLogWriter.Start(b.writerWG)
 
 	// register and start our spool flushers
 	courier.RegisterFlusher(path.Join(b.config.SpoolDir, "msgs"), b.flushMsgFile)
@@ -521,7 +521,7 @@ func (b *backend) OnSendComplete(ctx context.Context, msg courier.MsgOut, status
 		}
 	}
 
-	if wasSuccess && urns.IsWhatsAppBSUID(newURN) && newURN != msg.URN() {
+	if wasSuccess && courier.IsWhatsAppBSUID(newURN) && newURN != msg.URN() {
 		alreadyHas, err := contactHasURN(ctx, b, dbMsg.OrgID_, dbMsg.ContactID_, newURN)
 		if err != nil {
 			slog.Error("unable to check contact URN", "error", err, "urn", newURN)

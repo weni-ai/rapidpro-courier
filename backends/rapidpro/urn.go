@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/jmoiron/sqlx"
+	"github.com/vinovest/sqlx"
 	"github.com/nyaruka/courier"
 	"github.com/nyaruka/courier/utils"
 	"github.com/nyaruka/gocommon/urns"

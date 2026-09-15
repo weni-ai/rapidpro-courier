@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"path/filepath"
 
-	"github.com/jmoiron/sqlx"
+	"github.com/vinovest/sqlx"
 	"github.com/nyaruka/courier"
 	"github.com/nyaruka/gocommon/uuids"
 )

@@ -260,7 +260,7 @@ type SendResponse struct {
 // RecipientFields returns the to and recipient field values for the given URN. A business-scoped user ID
 // (whatsapp URN in the CC.xxx form) goes in the recipient field; a phone number goes in the to field.
 func RecipientFields(urn urns.URN) (to, recipient string) {
-	if urns.IsWhatsAppBSUID(urn) {
+	if courier.IsWhatsAppBSUID(urn) {
 		return "", urn.Path()
 	}
 	return urn.Path(), ""

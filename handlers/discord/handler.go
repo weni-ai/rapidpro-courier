@@ -16,6 +16,10 @@ import (
 	"github.com/nyaruka/gocommon/urns"
 )
 
+// Discord was removed from gocommon in v1.72. Mumbai still ships the Discord handler.
+// Parse (not New) because unregistered schemes fail Validate.
+const discordPrefix = "discord"
+
 const (
 	jsonMimeTypeType   = "application/json"
 	urlEncodedMimeType = "application/x-www-form-urlencoded"
@@ -89,7 +93,7 @@ func (h *handler) receiveMessage(ctx context.Context, channel courier.Channel, w
 	date := time.Now()
 
 	// create our URN
-	urn, err := urns.New(urns.Discord, from)
+	urn, err := urns.Parse(discordPrefix + ":" + from)
 	if err != nil {
 		return nil, handlers.WriteAndLogRequestError(ctx, h, channel, w, r, err)
 	}

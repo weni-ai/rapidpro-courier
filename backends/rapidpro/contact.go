@@ -10,7 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/jmoiron/sqlx"
+	"github.com/vinovest/sqlx"
 	"github.com/nyaruka/courier"
 	"github.com/nyaruka/gocommon/dbutil"
 	"github.com/nyaruka/gocommon/urns"
@@ -262,7 +262,7 @@ func contactForMsg(ctx context.Context, b *backend, m *Msg, clog *courier.Channe
 }
 
 func altLookupURN(m *Msg) urns.URN {
-	if m.NewURN_ != nil && m.URN_.Scheme() == urns.WhatsApp.Prefix && urns.IsWhatsAppBSUID(m.NewURN_.Value) {
+	if m.NewURN_ != nil && m.URN_.Scheme() == urns.WhatsApp.Prefix && courier.IsWhatsAppBSUID(m.NewURN_.Value) {
 		return m.NewURN_.Value
 	}
 	return urns.NilURN
