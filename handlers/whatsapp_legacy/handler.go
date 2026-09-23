@@ -24,7 +24,7 @@ import (
 	"github.com/nyaruka/gocommon/i18n"
 	"github.com/nyaruka/gocommon/jsonx"
 	"github.com/nyaruka/gocommon/urns"
-	"github.com/nyaruka/redisx"
+	"github.com/nyaruka/vkutil"
 	"github.com/patrickmn/go-cache"
 	"golang.org/x/mod/semver"
 )
@@ -246,10 +246,10 @@ func (h *handler) receiveEvents(ctx context.Context, channel courier.Channel, w 
 		} else if msg.Type == "image" && msg.Image != nil {
 			text = msg.Image.Caption
 			mediaURL, err = resolveMediaURL(channel, msg.Image.ID)
-		} else if msg.Type == "interactive" {
-			if msg.Interactive.Type == "button_reply" {
+		} else if msg.Type == "interactive" && msg.Interactive != nil {
+			if msg.Interactive.Type == "button_reply" && msg.Interactive.ButtonReply != nil {
 				text = msg.Interactive.ButtonReply.Title
-			} else {
+			} else if msg.Interactive.Type == "list_reply" && msg.Interactive.ListReply != nil {
 				text = msg.Interactive.ListReply.Title
 			}
 		} else if msg.Type == "location" && msg.Location != nil {
@@ -274,7 +274,7 @@ func (h *handler) receiveEvents(ctx context.Context, channel courier.Channel, w 
 		}
 
 		// create our message
-		event := h.Backend().NewIncomingMsg(channel, urn, text, msg.ID, clog).WithReceivedOn(date).WithContactName(contactNames[msg.From])
+		event := h.Backend().NewIncomingMsg(ctx, channel, urn, text, msg.ID, clog).WithReceivedOn(date).WithContactName(contactNames[msg.From])
 
 		// we had an error downloading media
 		if err != nil {
@@ -552,7 +552,7 @@ func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.Sen
 
 	var wppID string
 
-	payloads, err := buildPayloads(msg, h, clog)
+	payloads, err := buildPayloads(ctx, msg, h, clog)
 
 	fail := payloads == nil && err != nil
 	if fail {
@@ -586,13 +586,19 @@ func (h *handler) WriteRequestError(ctx context.Context, w http.ResponseWriter, 
 	return courier.WriteError(w, http.StatusOK, err)
 }
 
-func buildPayloads(msg courier.MsgOut, h *handler, clog *courier.ChannelLog) ([]any, error) {
+func buildPayloads(ctx context.Context, msg courier.MsgOut, h *handler, clog *courier.ChannelLog) ([]any, error) {
 	var payloads []any
 	var err error
 
 	parts := handlers.SplitMsgByChannel(msg.Channel(), msg.Text(), maxMsgLength)
 
 	qrs := msg.QuickReplies()
+	qrsAsList := false
+	for i, qr := range qrs {
+		if i > 2 || qr.Extra != "" {
+			qrsAsList = true
+		}
+	}
 	langCode := getSupportedLanguage(msg.Locale())
 	wppVersion := msg.Channel().ConfigForKey("version", "0").(string)
 	isInteractiveMsgCompatible := semver.Compare(wppVersion, interactiveMsgMinSupVersion)
@@ -611,7 +617,7 @@ func buildPayloads(msg courier.MsgOut, h *handler, clog *courier.ChannelLog) ([]
 		for attachmentCount, attachment := range msg.Attachments() {
 
 			mimeType, mediaURL := handlers.SplitAttachment(attachment)
-			mediaID, err := h.fetchMediaID(msg, mediaURL, clog)
+			mediaID, err := h.fetchMediaID(ctx, msg, mediaURL, clog)
 			if err != nil {
 				slog.Error("error while uploading media to whatsapp", "error", err, "channel_uuid", msg.Channel().UUID())
 			}
@@ -710,8 +716,8 @@ func buildPayloads(msg courier.MsgOut, h *handler, clog *courier.ChannelLog) ([]
 						Type: "interactive",
 					}
 
-					// up to 3 qrs the interactive message will be button type, otherwise it will be list
-					if len(qrs) <= 3 {
+					// we show buttons
+					if !qrsAsList {
 						payload.Interactive.Type = "button"
 						payload.Interactive.Body.Text = part
 						btns := make([]mtButton, len(qrs))
@@ -720,7 +726,7 @@ func buildPayloads(msg courier.MsgOut, h *handler, clog *courier.ChannelLog) ([]
 								Type: "reply",
 							}
 							btns[i].Reply.ID = fmt.Sprint(i)
-							btns[i].Reply.Title = qr
+							btns[i].Reply.Title = qr.Text
 						}
 						payload.Interactive.Action.Buttons = btns
 						payloads = append(payloads, payload)
@@ -733,8 +739,9 @@ func buildPayloads(msg courier.MsgOut, h *handler, clog *courier.ChannelLog) ([]
 						}
 						for i, qr := range qrs {
 							section.Rows[i] = mtSectionRow{
-								ID:    fmt.Sprint(i),
-								Title: qr,
+								ID:          fmt.Sprint(i),
+								Title:       qr.Text,
+								Description: qr.Extra,
 							}
 						}
 						payload.Interactive.Action.Sections = []mtSection{
@@ -827,8 +834,8 @@ func buildPayloads(msg courier.MsgOut, h *handler, clog *courier.ChannelLog) ([]
 							Type: "interactive",
 						}
 
-						// up to 3 qrs the interactive message will be button type, otherwise it will be list
-						if len(qrs) <= 3 {
+						// we show buttons
+						if !qrsAsList {
 							payload.Interactive.Type = "button"
 							payload.Interactive.Body.Text = part
 							btns := make([]mtButton, len(qrs))
@@ -837,15 +844,7 @@ func buildPayloads(msg courier.MsgOut, h *handler, clog *courier.ChannelLog) ([]
 									Type: "reply",
 								}
 								btns[i].Reply.ID = fmt.Sprint(i)
-								var text string
-								if strings.Contains(qr, "\\/") {
-									text = strings.Replace(qr, "\\", "", -1)
-								} else if strings.Contains(qr, "\\\\") {
-									text = strings.Replace(qr, "\\\\", "\\", -1)
-								} else {
-									text = qr
-								}
-								btns[i].Reply.Title = text
+								btns[i].Reply.Title = qr.Text
 							}
 							payload.Interactive.Action.Buttons = btns
 							payloads = append(payloads, payload)
@@ -870,8 +869,9 @@ func buildPayloads(msg courier.MsgOut, h *handler, clog *courier.ChannelLog) ([]
 									text = qr
 								}
 								section.Rows[i] = mtSectionRow{
-									ID:    fmt.Sprint(i),
-									Title: text,
+									ID:          fmt.Sprint(i),
+									Title:       qr.Text,
+									Description: qr.Extra,
 								}
 							}
 							payload.Interactive.Action.Sections = []mtSection{
@@ -908,19 +908,19 @@ func buildPayloads(msg courier.MsgOut, h *handler, clog *courier.ChannelLog) ([]
 }
 
 // fetchMediaID tries to fetch the id for the uploaded media, setting the result in redis.
-func (h *handler) fetchMediaID(msg courier.MsgOut, mediaURL string, clog *courier.ChannelLog) (string, error) {
+func (h *handler) fetchMediaID(ctx context.Context, msg courier.MsgOut, mediaURL string, clog *courier.ChannelLog) (string, error) {
 	// check in cache first
 	cacheKey := fmt.Sprintf(mediaCacheKeyPattern, msg.Channel().UUID())
-	mediaCache := redisx.NewIntervalHash(cacheKey, time.Hour*24, 2)
+	mediaCache := vkutil.NewIntervalHash(cacheKey, time.Hour*24, 2)
 
 	var mediaID string
 	var err error
-	h.WithRedisConn(func(rc redis.Conn) {
-		mediaID, err = mediaCache.Get(rc, mediaURL)
+	h.WithValkeyConn(func(rc redis.Conn) {
+		mediaID, err = mediaCache.Get(ctx, rc, mediaURL)
 	})
 
 	if err != nil {
-		return "", fmt.Errorf("error reading media id from redis: %s : %s: %w", cacheKey, mediaURL, err)
+		return "", fmt.Errorf("error reading media id from valkey: %s : %s: %w", cacheKey, mediaURL, err)
 	} else if mediaID != "" {
 		return mediaID, nil
 	}
@@ -977,8 +977,8 @@ func (h *handler) fetchMediaID(msg courier.MsgOut, mediaURL string, clog *courie
 	}
 
 	// put in cache
-	h.WithRedisConn(func(rc redis.Conn) {
-		err = mediaCache.Set(rc, mediaURL, mediaID)
+	h.WithValkeyConn(func(rc redis.Conn) {
+		err = mediaCache.Set(ctx, rc, mediaURL, mediaID)
 	})
 
 	if err != nil {
@@ -1002,7 +1002,7 @@ func (h *handler) sendWhatsAppMsg(msg courier.MsgOut, sendPath *url.URL, payload
 	if resp != nil && (resp.StatusCode == 429 || resp.StatusCode == 503) {
 		rateLimitKey := fmt.Sprintf("rate_limit:%s", msg.Channel().UUID())
 
-		h.WithRedisConn(func(rc redis.Conn) {
+		h.WithValkeyConn(func(rc redis.Conn) {
 			rc.Do("SET", rateLimitKey, "engaged")
 
 			// The rate limit is 50 requests per second
@@ -1022,7 +1022,7 @@ func (h *handler) sendWhatsAppMsg(msg courier.MsgOut, sendPath *url.URL, payload
 		if hasTiersError(*errPayload) {
 			rateLimitBulkKey := fmt.Sprintf("rate_limit_bulk:%s", msg.Channel().UUID())
 
-			h.WithRedisConn(func(rc redis.Conn) {
+			h.WithValkeyConn(func(rc redis.Conn) {
 				rc.Do("SET", rateLimitBulkKey, "engaged")
 
 				// The WA tiers spam rate limit hit
@@ -1152,7 +1152,7 @@ func getSendWhatsAppMsgId(resp []byte) (string, error) {
 	if externalID, err := jsonparser.GetString(resp, "messages", "[0]", "id"); err == nil {
 		return externalID, nil
 	} else {
-		return "", courier.ErrResponseUnexpected
+		return "", courier.ErrResponseContent
 	}
 }
 
