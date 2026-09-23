@@ -183,7 +183,7 @@ type eventsPayload struct {
 func checkBlockedContact(payload *eventsPayload, ctx context.Context, channel courier.Channel, h *handler, clog *courier.ChannelLog) error {
 	if len(payload.Contacts) > 0 {
 		if contactURN, err := urns.New(urns.WhatsApp, payload.Contacts[0].WaID); err == nil {
-			if contact, err := h.Backend().GetContact(ctx, channel, contactURN, nil, payload.Contacts[0].Profile.Name, clog); err == nil {
+			if contact, err := h.Backend().GetContact(ctx, channel, contactURN, nil, payload.Contacts[0].Profile.Name, false, clog); err == nil {
 				if dbContact, ok := contact.(*rapidpro.Contact); ok && dbContact.Status_ == "B" {
 					return errors.New("blocked contact sending message")
 				}
@@ -606,14 +606,7 @@ func buildPayloads(ctx context.Context, msg courier.MsgOut, h *handler, clog *co
 
 	textAsCaption := false
 
-	// do we have a template?
-	var templating *MsgTemplating
-	templating, err = h.getTemplating(msg)
-	if err != nil {
-		return nil, fmt.Errorf("unable to decode template: %s for channel: %s: %w", string(msg.Metadata()), msg.Channel().UUID(), err)
-	}
-
-	if len(msg.Attachments()) > 0 && templating == nil {
+	if len(msg.Attachments()) > 0 && msg.Templating() == nil {
 		for attachmentCount, attachment := range msg.Attachments() {
 
 			mimeType, mediaURL := handlers.SplitAttachment(attachment)
@@ -861,16 +854,16 @@ func buildPayloads(ctx context.Context, msg courier.MsgOut, h *handler, clog *co
 							}
 							for i, qr := range qrs {
 								var text string
-								if strings.Contains(qr, "\\/") {
-									text = strings.Replace(qr, "\\", "", -1)
-								} else if strings.Contains(qr, "\\\\") {
-									text = strings.Replace(qr, "\\\\", "\\", -1)
+								if strings.Contains(qr.Text, "\\/") {
+									text = strings.Replace(qr.Text, "\\", "", -1)
+								} else if strings.Contains(qr.Text, "\\\\") {
+									text = strings.Replace(qr.Text, "\\\\", "\\", -1)
 								} else {
-									text = qr
+									text = qr.Text
 								}
 								section.Rows[i] = mtSectionRow{
 									ID:          fmt.Sprint(i),
-									Title:       qr.Text,
+									Title:       text,
 									Description: qr.Extra,
 								}
 							}
@@ -1188,38 +1181,6 @@ func (h *handler) checkWhatsAppContact(channel courier.Channel, baseURL string, 
 			return respBody, courier.ErrResponseUnexpected
 		}
 	}
-}
-
-func (h *handler) getTemplating(msg courier.MsgOut) (*MsgTemplating, error) {
-	if len(msg.Metadata()) == 0 {
-		return nil, nil
-	}
-
-	metadata := &struct {
-		Templating *MsgTemplating `json:"templating"`
-	}{}
-	if err := json.Unmarshal(msg.Metadata(), metadata); err != nil {
-		return nil, err
-	}
-
-	if metadata.Templating == nil {
-		return nil, nil
-	}
-
-	if err := utils.Validate(metadata.Templating); err != nil {
-		return nil, fmt.Errorf("invalid templating definition: %w", err)
-	}
-
-	return metadata.Templating, nil
-}
-
-type MsgTemplating struct {
-	Template struct {
-		Name string `json:"name" validate:"required"`
-		UUID string `json:"uuid" validate:"required"`
-	} `json:"template" validate:"required,dive"`
-	Namespace string   `json:"namespace"`
-	Variables []string `json:"variables"`
 }
 
 func getSupportedLanguage(lc i18n.Locale) string {

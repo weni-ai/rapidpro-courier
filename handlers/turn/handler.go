@@ -20,7 +20,7 @@ import (
 	"github.com/nyaruka/courier/utils"
 	"github.com/nyaruka/gocommon/i18n"
 	"github.com/nyaruka/gocommon/urns"
-	"github.com/nyaruka/redisx"
+	"github.com/nyaruka/vkutil"
 	"github.com/patrickmn/go-cache"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -254,7 +254,7 @@ func (h *handler) receiveEvents(ctx context.Context, channel courier.Channel, w 
 		}
 
 		// create our message
-		event := h.Backend().NewIncomingMsg(channel, urn, text, msg.ID, clog).WithReceivedOn(date).WithContactName(contactNames[msg.From])
+		event := h.Backend().NewIncomingMsg(ctx, channel, urn, text, msg.ID, clog).WithReceivedOn(date).WithContactName(contactNames[msg.From])
 
 		// we had an error downloading media
 		if err != nil {
@@ -532,7 +532,7 @@ func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.Sen
 
 	var wppID string
 
-	payloads, err := buildPayloads(msg, h, clog)
+	payloads, err := buildPayloads(ctx, msg, h, clog)
 
 	fail := payloads == nil && err != nil
 	if fail {
@@ -566,7 +566,7 @@ func (h *handler) WriteRequestError(ctx context.Context, w http.ResponseWriter, 
 	return courier.WriteError(w, http.StatusOK, err)
 }
 
-func buildPayloads(msg courier.MsgOut, h *handler, clog *courier.ChannelLog) ([]interface{}, error) {
+func buildPayloads(ctx context.Context, msg courier.MsgOut, h *handler, clog *courier.ChannelLog) ([]interface{}, error) {
 	var payloads []interface{}
 	var err error
 
@@ -580,18 +580,11 @@ func buildPayloads(msg courier.MsgOut, h *handler, clog *courier.ChannelLog) ([]
 
 	textAsCaption := false
 
-	// do we have a template?
-	var templating *MsgTemplating
-	templating, err = h.getTemplating(msg)
-	if err != nil {
-		return nil, errors.Wrapf(err, "unable to decode template: %s for channel: %s", string(msg.Metadata()), msg.Channel().UUID())
-	}
-
-	if len(msg.Attachments()) > 0 && templating == nil {
+	if len(msg.Attachments()) > 0 && msg.Templating() == nil {
 		for attachmentCount, attachment := range msg.Attachments() {
 
 			mimeType, mediaURL := handlers.SplitAttachment(attachment)
-			mediaID, err := h.fetchMediaID(msg, mimeType, mediaURL, clog)
+			mediaID, err := h.fetchMediaID(ctx, msg, mimeType, mediaURL, clog)
 			if err != nil {
 				logrus.WithField("channel_uuid", msg.Channel().UUID()).WithError(err).Error("error while uploading media to whatsapp")
 			}
@@ -700,7 +693,7 @@ func buildPayloads(msg courier.MsgOut, h *handler, clog *courier.ChannelLog) ([]
 								Type: "reply",
 							}
 							btns[i].Reply.ID = fmt.Sprint(i)
-							btns[i].Reply.Title = qr
+							btns[i].Reply.Title = qr.Text
 						}
 						payload.Interactive.Action.Buttons = btns
 						payloads = append(payloads, payload)
@@ -714,7 +707,7 @@ func buildPayloads(msg courier.MsgOut, h *handler, clog *courier.ChannelLog) ([]
 						for i, qr := range qrs {
 							section.Rows[i] = mtSectionRow{
 								ID:    fmt.Sprint(i),
-								Title: qr,
+								Title: qr.Text,
 							}
 						}
 						payload.Interactive.Action.Sections = []mtSection{
@@ -829,12 +822,12 @@ func buildPayloads(msg courier.MsgOut, h *handler, clog *courier.ChannelLog) ([]
 								}
 								btns[i].Reply.ID = fmt.Sprint(i)
 								var text string
-								if strings.Contains(qr, "\\/") {
-									text = strings.Replace(qr, "\\", "", -1)
-								} else if strings.Contains(qr, "\\\\") {
-									text = strings.Replace(qr, "\\\\", "\\", -1)
+								if strings.Contains(qr.Text, "\\/") {
+									text = strings.Replace(qr.Text, "\\", "", -1)
+								} else if strings.Contains(qr.Text, "\\\\") {
+									text = strings.Replace(qr.Text, "\\\\", "\\", -1)
 								} else {
-									text = qr
+									text = qr.Text
 								}
 								btns[i].Reply.Title = text
 							}
@@ -853,12 +846,12 @@ func buildPayloads(msg courier.MsgOut, h *handler, clog *courier.ChannelLog) ([]
 							}
 							for i, qr := range qrs {
 								var text string
-								if strings.Contains(qr, "\\/") {
-									text = strings.Replace(qr, "\\", "", -1)
-								} else if strings.Contains(qr, "\\\\") {
-									text = strings.Replace(qr, "\\\\", "\\", -1)
+								if strings.Contains(qr.Text, "\\/") {
+									text = strings.Replace(qr.Text, "\\", "", -1)
+								} else if strings.Contains(qr.Text, "\\\\") {
+									text = strings.Replace(qr.Text, "\\\\", "\\", -1)
 								} else {
-									text = qr
+									text = qr.Text
 								}
 								section.Rows[i] = mtSectionRow{
 									ID:    fmt.Sprint(i),
@@ -899,14 +892,14 @@ func buildPayloads(msg courier.MsgOut, h *handler, clog *courier.ChannelLog) ([]
 }
 
 // fetchMediaID tries to fetch the id for the uploaded media, setting the result in redis.
-func (h *handler) fetchMediaID(msg courier.MsgOut, mimeType, mediaURL string, clog *courier.ChannelLog) (string, error) {
+func (h *handler) fetchMediaID(ctx context.Context, msg courier.MsgOut, mimeType, mediaURL string, clog *courier.ChannelLog) (string, error) {
 	// check in cache first
 	rc := h.Backend().RedisPool().Get()
 	defer rc.Close()
 
 	cacheKey := fmt.Sprintf(mediaCacheKeyPattern, msg.Channel().UUID())
-	mediaCache := redisx.NewIntervalHash(cacheKey, time.Hour*24, 2)
-	mediaID, err := mediaCache.Get(rc, mediaURL)
+	mediaCache := vkutil.NewIntervalHash(cacheKey, time.Hour*24, 2)
+	mediaID, err := mediaCache.Get(ctx, rc, mediaURL)
 	if err != nil {
 		return "", errors.Wrapf(err, "error reading media id from redis: %s : %s", cacheKey, mediaURL)
 	} else if mediaID != "" {
@@ -968,7 +961,7 @@ func (h *handler) fetchMediaID(msg courier.MsgOut, mimeType, mediaURL string, cl
 	}
 
 	// put in cache
-	err = mediaCache.Set(rc, mediaURL, mediaID)
+	err = mediaCache.Set(ctx, rc, mediaURL, mediaID)
 	if err != nil {
 		return "", errors.Wrapf(err, "error setting media id in cache")
 	}
@@ -1173,38 +1166,6 @@ func (h *handler) checkWhatsAppContact(channel courier.Channel, baseURL string, 
 		return respBody, nil
 	}
 	return respBody, courier.ErrResponseUnexpected
-}
-
-func (h *handler) getTemplating(msg courier.MsgOut) (*MsgTemplating, error) {
-	if len(msg.Metadata()) == 0 {
-		return nil, nil
-	}
-
-	metadata := &struct {
-		Templating *MsgTemplating `json:"templating"`
-	}{}
-	if err := json.Unmarshal(msg.Metadata(), metadata); err != nil {
-		return nil, err
-	}
-
-	if metadata.Templating == nil {
-		return nil, nil
-	}
-
-	if err := utils.Validate(metadata.Templating); err != nil {
-		return nil, errors.Wrapf(err, "invalid templating definition")
-	}
-
-	return metadata.Templating, nil
-}
-
-type MsgTemplating struct {
-	Template struct {
-		Name string `json:"name" validate:"required"`
-		UUID string `json:"uuid" validate:"required"`
-	} `json:"template" validate:"required,dive"`
-	Namespace string   `json:"namespace"`
-	Variables []string `json:"variables"`
 }
 
 func getSupportedLanguage(lc i18n.Locale) string {

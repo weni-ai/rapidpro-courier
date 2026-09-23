@@ -205,7 +205,7 @@ func (h *handler) receiveVerify(ctx context.Context, channel courier.Channel, w 
 
 	// verify the token against the channel-specific webhook secret; if it matches, return the challenge
 	secret := r.URL.Query().Get("hub.verify_token")
-	if !utils.SecretEqual(secret, h.Server().Config().FacebookWebhookSecret) {
+	if !utils.SecretEqual(secret, expectedSecret) {
 		return nil, handlers.WriteAndLogRequestError(ctx, h, channel, w, r, fmt.Errorf("token does not match secret"))
 	}
 	// and respond with the challenge token
@@ -661,7 +661,7 @@ func (h *handler) processFacebookInstagramPayload(ctx context.Context, channel c
 
 			text := strings.Join(payloads[:], "|")
 
-			event := h.Backend().NewIncomingMsg(channel, urn, text, msg.Message.MID, clog).WithReceivedOn(date)
+			event := h.Backend().NewIncomingMsg(ctx, channel, urn, text, msg.Message.MID, clog).WithReceivedOn(date)
 
 			err := h.Backend().WriteMsg(ctx, event, clog)
 			if err != nil {

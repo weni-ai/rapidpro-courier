@@ -1,6 +1,8 @@
 package telegram
 
 import (
+	"strings"
+
 	"github.com/nyaruka/courier"
 	"github.com/nyaruka/courier/handlers"
 	"github.com/nyaruka/courier/utils"
