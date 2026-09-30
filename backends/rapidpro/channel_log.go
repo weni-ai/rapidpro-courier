@@ -5,15 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
-	"github.com/jmoiron/sqlx"
 	"github.com/nyaruka/courier"
 	"github.com/nyaruka/courier/utils/clogs"
-	"github.com/nyaruka/gocommon/aws/dynamo"
+	"github.com/nyaruka/courier/utils/dynsvc"
+	"github.com/vinovest/sqlx"
 	"github.com/nyaruka/gocommon/dbutil"
 	"github.com/nyaruka/gocommon/jsonx"
 	"github.com/nyaruka/gocommon/syncx"
@@ -74,14 +73,14 @@ type DBLogWriter struct {
 	*syncx.Batcher[*dbChannelLog]
 }
 
-func NewDBLogWriter(db *sqlx.DB, wg *sync.WaitGroup) *DBLogWriter {
+func NewDBLogWriter(db *sqlx.DB) *DBLogWriter {
 	return &DBLogWriter{
 		Batcher: syncx.NewBatcher(func(batch []*dbChannelLog) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			defer cancel()
 
 			writeDBChannelLogs(ctx, db, batch)
-		}, 1000, time.Millisecond*500, 1000, wg),
+		}, 1000, time.Millisecond*500, 1000),
 	}
 }
 
@@ -110,7 +109,7 @@ type DynamoLogWriter struct {
 	*syncx.Batcher[*clogs.Log]
 }
 
-func NewDynamoLogWriter(dy *dynamo.Service, wg *sync.WaitGroup) *DynamoLogWriter {
+func NewDynamoLogWriter(dy *dynsvc.Service) *DynamoLogWriter {
 	return &DynamoLogWriter{
 		Batcher: syncx.NewBatcher(func(batch []*clogs.Log) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
@@ -119,11 +118,11 @@ func NewDynamoLogWriter(dy *dynamo.Service, wg *sync.WaitGroup) *DynamoLogWriter
 			if err := writeDynamoChannelLogs(ctx, dy, batch); err != nil {
 				slog.Error("error writing logs to dynamo", "error", err)
 			}
-		}, 25, time.Millisecond*500, 1000, wg),
+		}, 25, time.Millisecond*500, 1000),
 	}
 }
 
-func writeDynamoChannelLogs(ctx context.Context, ds *dynamo.Service, batch []*clogs.Log) error {
+func writeDynamoChannelLogs(ctx context.Context, ds *dynsvc.Service, batch []*clogs.Log) error {
 	writeReqs := make([]types.WriteRequest, len(batch))
 
 	for i, l := range batch {

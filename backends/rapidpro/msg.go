@@ -94,9 +94,16 @@ type Msg struct {
 
 	ContactName_   string            `json:"contact_name"`
 	URNAuthTokens_ map[string]string `json:"auth_tokens"`
+	NewURN_        *NewURNSpec       `json:"new_urn,omitempty"`
 	channel        *Channel
 	workerToken    queue.WorkerToken
 	alreadyWritten bool
+}
+
+// NewURNSpec describes a URN to append to the contact after this message is handled
+type NewURNSpec struct {
+	Value  urns.URN `json:"value"`
+	Action string   `json:"action"`
 }
 
 // newMsg creates a new DBMsg object with the passed in parameters
@@ -177,6 +184,16 @@ func (m *Msg) WithURNAuthTokens(tokens map[string]string) courier.MsgIn {
 	return m
 }
 func (m *Msg) WithReceivedOn(date time.Time) courier.MsgIn { m.SentOn_ = &date; return m }
+func (m *Msg) WithNewURN(urn urns.URN) courier.MsgIn {
+	m.NewURN_ = &NewURNSpec{Value: urn, Action: "append"}
+	return m
+}
+func (m *Msg) NewURN() urns.URN {
+	if m.NewURN_ == nil {
+		return urns.NilURN
+	}
+	return m.NewURN_.Value
+}
 
 func (m *Msg) hash() string {
 	hash := sha1.Sum([]byte(m.Text_ + "|" + strings.Join(m.Attachments_, "|")))
@@ -250,7 +267,7 @@ INSERT INTO
 RETURNING id`
 
 func writeMsgToDB(ctx context.Context, b *backend, m *Msg, clog *courier.ChannelLog) error {
-	contact, err := contactForURN(ctx, b, m.OrgID_, m.channel, m.URN_, m.URNAuthTokens_, m.ContactName_, clog)
+	contact, err := contactForMsg(ctx, b, m, clog)
 
 	// our db is down, write to the spool, we will write/queue this later
 	if err != nil {

@@ -24,6 +24,10 @@ func queueMsgHandling(rc redis.Conn, c *Contact, m *Msg) error {
 		"new_contact":     c.IsNew_,
 	}
 
+	if m.NewURN_ != nil {
+		body["new_urn"] = m.NewURN_
+	}
+
 	return queueMailroomTask(rc, "msg_event", m.OrgID_, m.ContactID_, body)
 }
 

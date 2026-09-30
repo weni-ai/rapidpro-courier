@@ -76,6 +76,9 @@ var (
 	tmsReceiveExtra = "ToCountry=US&ToState=&SmsMessageSid=SMbbf29aeb9d380ce2a1c0ae4635ff9dab&NumMedia=0&ToCity=&FromZip=27609&SmsSid=SMbbf29aeb9d380ce2a1c0ae4635ff9dab&FromState=NC&SmsStatus=received&FromCity=RALEIGH&Body=John+Cruz&FromCountry=US&To=384387&ToZip=&NumSegments=1&MessageSid=SMbbf29aeb9d380ce2a1c0ae4635ff9dab&AccountSid=acctid&From=%2B14133881111&ApiVersion=2010-04-01"
 
 	waReceiveValid         = "ToCountry=US&ToState=District+Of+Columbia&SmsMessageSid=SMe287d7109a5a925f182f0e07fe5b223b&NumMedia=0&ToCity=&FromZip=01022&SmsSid=SMe287d7109a5a925f182f0e07fe5b223b&FromState=MA&SmsStatus=received&FromCity=CHICOPEE&Body=Msg&FromCountry=US&To=whatsapp:%2B12028831111&ToZip=&NumSegments=1&MessageSid=SMe287d7109a5a925f182f0e07fe5b223b&AccountSid=acctid&From=whatsapp:%2B14133881111&ApiVersion=2010-04-01"
+	waReceiveBSUIDValid    = "ToCountry=US&ToState=District+Of+Columbia&SmsMessageSid=SMe287d7109a5a925f182f0e07fe5b223b&NumMedia=0&ToCity=&FromZip=01022&SmsSid=SMe287d7109a5a925f182f0e07fe5b223b&FromState=MA&SmsStatus=received&FromCity=CHICOPEE&Body=Msg&FromCountry=US&To=whatsapp:%2B12028831111&ToZip=&NumSegments=1&MessageSid=SMe287d7109a5a925f182f0e07fe5b223b&AccountSid=acctid&From=whatsapp:%2B14133881111&ExternalUserId=whatsapp:US.1234&ApiVersion=2010-04-01"
+	waReceiveFromBSUID     = "ToCountry=US&ToState=District+Of+Columbia&SmsMessageSid=SMe287d7109a5a925f182f0e07fe5b223b&NumMedia=0&ToCity=&FromZip=01022&SmsSid=SMe287d7109a5a925f182f0e07fe5b223b&FromState=MA&SmsStatus=received&FromCity=CHICOPEE&Body=Msg&FromCountry=US&To=whatsapp:%2B12028831111&ToZip=&NumSegments=1&MessageSid=SMe287d7109a5a925f182f0e07fe5b223b&AccountSid=acctid&From=whatsapp:US.1234&ExternalUserId=whatsapp:US.1234&ApiVersion=2010-04-01"
+	waReceiveBSUIDInvalid  = "ToCountry=US&ToState=District+Of+Columbia&SmsMessageSid=SMe287d7109a5a925f182f0e07fe5b223b&NumMedia=0&ToCity=&FromZip=01022&SmsSid=SMe287d7109a5a925f182f0e07fe5b223b&FromState=MA&SmsStatus=received&FromCity=CHICOPEE&Body=Msg&FromCountry=US&To=whatsapp:%2B12028831111&ToZip=&NumSegments=1&MessageSid=SMe287d7109a5a925f182f0e07fe5b223b&AccountSid=acctid&From=whatsapp:%2B14133881111&ExternalUserId=whatsapp:foo_bar&ApiVersion=2010-04-01"
 	waReceiveButtonValid   = "ToCountry=US&ToState=District+Of+Columbia&SmsMessageSid=SMe287d7109a5a925f182f0e07fe5b223b&NumMedia=0&ToCity=&FromZip=01022&SmsSid=SMe287d7109a5a925f182f0e07fe5b223b&FromState=MA&SmsStatus=received&FromCity=CHICOPEE&Body=Msg&ButtonText=Confirm&FromCountry=US&To=whatsapp:%2B12028831111&ToZip=&NumSegments=1&MessageSid=SMe287d7109a5a925f182f0e07fe5b223b&AccountSid=acctid&From=whatsapp:%2B14133881111&ApiVersion=2010-04-01"
 	waReceivePrefixlessURN = "ToCountry=US&ToState=CA&SmsMessageSid=SM681a1f26d9ec591431ce406e8f399525&NumMedia=0&ToCity=&FromZip=60625&SmsSid=SM681a1f26d9ec591431ce406e8f399525&FromState=IL&SmsStatus=received&FromCity=CHICAGO&Body=Msg&FromCountry=US&To=%2B12028831111&ToZip=&NumSegments=1&MessageSid=SM681a1f26d9ec591431ce406e8f399525&AccountSid=acctid&From=%2B14133881111&ApiVersion=2010-04-01"
 )
@@ -449,6 +452,15 @@ var waTestCases = []IncomingTestCase{
 
 var twaTestCases = []IncomingTestCase{
 	{Label: "Receive Valid", URL: twaReceiveURL, Data: waReceiveValid, ExpectedRespStatus: 200, ExpectedBodyContains: "<Response/>",
+		ExpectedMsgText: Sp("Msg"), ExpectedURN: "whatsapp:14133881111", ExpectedExternalID: "SMe287d7109a5a925f182f0e07fe5b223b",
+		PrepRequest: addValidSignature},
+	{Label: "Receive BSUID Valid", URL: twaReceiveURL, Data: waReceiveBSUIDValid, ExpectedRespStatus: 200, ExpectedBodyContains: "<Response/>",
+		ExpectedMsgText: Sp("Msg"), ExpectedURN: "whatsapp:14133881111", ExpectedNewURN: "whatsapp:US.1234", ExpectedExternalID: "SMe287d7109a5a925f182f0e07fe5b223b",
+		PrepRequest: addValidSignature},
+	{Label: "Receive From BSUID with no phone", URL: twaReceiveURL, Data: waReceiveFromBSUID, ExpectedRespStatus: 200, ExpectedBodyContains: "<Response/>",
+		ExpectedMsgText: Sp("Msg"), ExpectedURN: "whatsapp:US.1234", ExpectedExternalID: "SMe287d7109a5a925f182f0e07fe5b223b",
+		PrepRequest: addValidSignature},
+	{Label: "Receive with invalid ExternalUserId, no new URN added", URL: twaReceiveURL, Data: waReceiveBSUIDInvalid, ExpectedRespStatus: 200, ExpectedBodyContains: "<Response/>",
 		ExpectedMsgText: Sp("Msg"), ExpectedURN: "whatsapp:14133881111", ExpectedExternalID: "SMe287d7109a5a925f182f0e07fe5b223b",
 		PrepRequest: addValidSignature},
 	{Label: "Receive Valid", URL: twaReceiveURL, Data: waReceiveButtonValid, ExpectedRespStatus: 200, ExpectedBodyContains: "<Response/>",
@@ -1113,6 +1125,21 @@ var twaSendTestCases = []OutgoingTestCase{
 		},
 		ExpectedRequests: []ExpectedRequest{{
 			Form:    url.Values{"Body": {"Simple Message ☺"}, "To": {"whatsapp:+250788383383"}, "From": {"whatsapp:+12065551212"}, "MessagingServiceSid": {"messageServiceSID"}, "StatusCallback": {"https://localhost/c/twa/8eb23e93-5ecb-45ba-b726-3b064e0c56ab/status?id=10&action=callback"}},
+			Headers: map[string]string{"Authorization": "Basic YWNjb3VudFNJRDphdXRoVG9rZW4="},
+		}},
+		ExpectedExtIDs: []string{"1002"},
+	},
+	{
+		Label:   "Plain Send with BSUID as whatsapp URN",
+		MsgText: "Simple Message ☺",
+		MsgURN:  "whatsapp:US.1234",
+		MockResponses: map[string][]*httpx.MockResponse{
+			"https://api.twilio.com/2010-04-01/Accounts/accountSID/Messages.json": {
+				httpx.NewMockResponse(200, nil, []byte(`{ "sid": "1002" }`)),
+			},
+		},
+		ExpectedRequests: []ExpectedRequest{{
+			Form:    url.Values{"Body": {"Simple Message ☺"}, "To": {"whatsapp:US.1234"}, "From": {"whatsapp:+12065551212"}, "MessagingServiceSid": {"messageServiceSID"}, "StatusCallback": {"https://localhost/c/twa/8eb23e93-5ecb-45ba-b726-3b064e0c56ab/status?id=10&action=callback"}},
 			Headers: map[string]string{"Authorization": "Basic YWNjb3VudFNJRDphdXRoVG9rZW4="},
 		}},
 		ExpectedExtIDs: []string{"1002"},
