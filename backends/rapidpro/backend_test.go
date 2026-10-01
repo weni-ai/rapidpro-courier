@@ -380,7 +380,7 @@ func (ts *BackendTestSuite) TestMsgStatus() {
 		}
 		err := ts.b.WriteStatusUpdate(ctx, statusObj)
 		ts.NoError(err)
-		time.Sleep(600 * time.Millisecond) // give committer time to write this
+		ts.b.statusWriter.Flush()
 		return clog
 	}
 
@@ -389,7 +389,7 @@ func (ts *BackendTestSuite) TestMsgStatus() {
 		statusObj := ts.b.NewStatusUpdateByExternalID(channel, extID, status, clog)
 		err := ts.b.WriteStatusUpdate(ctx, statusObj)
 		ts.NoError(err)
-		time.Sleep(600 * time.Millisecond) // give committer time to write this
+		ts.b.statusWriter.Flush()
 		return clog
 	}
 
@@ -530,7 +530,7 @@ func (ts *BackendTestSuite) TestMsgStatus() {
 	status := ts.b.NewStatusUpdateByExternalID(channel, "ext1", models.MsgStatusSent, clog6)
 	err := ts.b.WriteStatusUpdate(ctx, status)
 	ts.NoError(err)
-	time.Sleep(time.Second)
+	ts.b.statusWriter.Flush()
 
 	// error our msg
 	now = time.Now().In(time.UTC)
@@ -538,8 +538,7 @@ func (ts *BackendTestSuite) TestMsgStatus() {
 	status = ts.b.NewStatusUpdateByExternalID(channel, "ext1", models.MsgStatusErrored, clog6)
 	err = ts.b.WriteStatusUpdate(ctx, status)
 	ts.NoError(err)
-
-	time.Sleep(time.Second) // give committer time to write this
+	ts.b.statusWriter.Flush()
 
 	m = testsuite.ReadDBMsg(ts.T(), ts.b.rt, "0199df0f-9f82-7689-b02d-f34105991321")
 	ts.Equal(m.Status, models.MsgStatusErrored)
@@ -552,8 +551,7 @@ func (ts *BackendTestSuite) TestMsgStatus() {
 	status = ts.b.NewStatusUpdateByExternalID(channel, "ext1", models.MsgStatusErrored, clog6)
 	err = ts.b.WriteStatusUpdate(ctx, status)
 	ts.NoError(err)
-
-	time.Sleep(time.Second) // give committer time to write this
+	ts.b.statusWriter.Flush()
 
 	m = testsuite.ReadDBMsg(ts.T(), ts.b.rt, "0199df0f-9f82-7689-b02d-f34105991321")
 	ts.Equal(m.Status, models.MsgStatusErrored)
@@ -563,10 +561,8 @@ func (ts *BackendTestSuite) TestMsgStatus() {
 	// third go
 	status = ts.b.NewStatusUpdateByExternalID(channel, "ext1", models.MsgStatusErrored, clog6)
 	err = ts.b.WriteStatusUpdate(ctx, status)
-
-	time.Sleep(time.Second) // give committer time to write this
-
 	ts.NoError(err)
+	ts.b.statusWriter.Flush()
 	m = testsuite.ReadDBMsg(ts.T(), ts.b.rt, "0199df0f-9f82-7689-b02d-f34105991321")
 	ts.Equal(m.Status, models.MsgStatusFailed)
 	ts.Equal(m.ErrorCount, 3)
@@ -653,9 +649,7 @@ func (ts *BackendTestSuite) TestSentExternalIDCaching() {
 	status1.SetExternalID("ex457")
 	err := ts.b.WriteStatusUpdate(ctx, status1)
 	ts.NoError(err)
-
-	// give batcher time to write it
-	time.Sleep(time.Millisecond * 600)
+	ts.b.statusWriter.Flush()
 
 	keys, err := redis.Strings(rc.Do("KEYS", "{sent-external-ids}:*"))
 	ts.NoError(err)
@@ -670,9 +664,7 @@ func (ts *BackendTestSuite) TestSentExternalIDCaching() {
 
 	err = ts.b.WriteStatusUpdate(ctx, status2)
 	ts.NoError(err)
-
-	// give batcher time to write it
-	time.Sleep(time.Millisecond * 700)
+	ts.b.statusWriter.Flush()
 
 	// msg status successfully updated in the database
 	assertdb.Query(ts.T(), ts.b.rt.DB, `SELECT status FROM msgs_msg WHERE id = 10000`).Returns("D")
@@ -825,7 +817,7 @@ func (ts *BackendTestSuite) TestOutgoingQueue() {
 	ts.Equal(msg.Text(), "test message")
 
 	// mark this message as dealt with
-	ts.b.OnSendComplete(ctx, msg, ts.b.NewStatusUpdate(msg.Channel(), msg.UUID(), models.MsgStatusWired, clog), clog)
+	ts.b.OnSendComplete(ctx, msg, ts.b.NewStatusUpdate(msg.Channel(), msg.UUID(), models.MsgStatusWired, clog), clog, urns.NilURN)
 
 	// this message should now be marked as sent
 	sent, err := ts.b.WasMsgSent(ctx, msg.UUID())

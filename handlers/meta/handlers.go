@@ -284,7 +284,12 @@ func (h *handler) processWhatsAppPayload(ctx context.Context, channel courier.Ch
 		for _, change := range entry.Changes {
 
 			for _, contact := range change.Value.Contacts {
-				contactNames[contact.WaID] = contact.Profile.Name
+				if contact.WaID != "" {
+					contactNames[contact.WaID] = contact.Profile.Name
+				}
+				if contact.UserID != "" {
+					contactNames[contact.UserID] = contact.Profile.Name
+				}
 			}
 
 			for _, msg := range change.Value.Messages {
@@ -299,7 +304,8 @@ func (h *handler) processWhatsAppPayload(ctx context.Context, channel courier.Ch
 				}
 				date := parseTimestamp(ts)
 
-				urn, err := urns.New(urns.WhatsApp, msg.From)
+				sender := whatsapp.Identifier(msg.From, msg.FromUserID)
+				urn, err := urns.New(urns.WhatsApp, sender)
 				if err != nil {
 					return nil, nil, handlers.WriteAndLogRequestError(ctx, h, channel, w, r, errors.New("invalid whatsapp id"))
 				}
@@ -355,7 +361,7 @@ func (h *handler) processWhatsAppPayload(ctx context.Context, channel courier.Ch
 				}
 
 				// create our message
-				event := h.Backend().NewIncomingMsg(ctx, channel, urn, text, msg.ID, clog).WithReceivedOn(date).WithContactName(contactNames[msg.From])
+				event := h.Backend().NewIncomingMsg(ctx, channel, urn, text, msg.ID, clog).WithReceivedOn(date).WithContactName(contactNames[sender])
 
 				// we had an error downloading media
 				if err != nil {
@@ -364,6 +370,10 @@ func (h *handler) processWhatsAppPayload(ctx context.Context, channel courier.Ch
 
 				if mediaURL != "" {
 					event.WithAttachment(mediaURL)
+				}
+
+				if urnErr := whatsapp.AttachUserID(event, urn, msg.FromUserID); urnErr != nil {
+					courier.LogRequestError(r, channel, urnErr)
 				}
 
 				err = h.Backend().WriteMsg(ctx, event, clog)
@@ -996,6 +1006,12 @@ func (h *handler) requestWAC(payload whatsapp.SendRequest, accessToken string, r
 	externalID := respPayload.Messages[0].ID
 	if externalID != "" {
 		res.AddExternalID(externalID)
+	}
+
+	if userID := respPayload.UserID(); userID != "" {
+		if userIDURN, urnErr := urns.New(urns.WhatsApp, userID); urnErr == nil {
+			res.SetNewURN(userIDURN)
+		}
 	}
 	return nil
 }

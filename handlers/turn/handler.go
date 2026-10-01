@@ -83,10 +83,12 @@ type eventsPayload struct {
 		Profile struct {
 			Name string `json:"name"`
 		} `json:"profile"`
-		WaID string `json:"wa_id"`
+		WaID   string `json:"wa_id"`
+		UserID string `json:"user_id"`
 	} `json:"contacts"`
 	Messages []struct {
-		From      string `json:"from"      validate:"required"`
+		From      string `json:"from"`
+		FromBSUID string `json:"from_bsuid"`
 		ID        string `json:"id"        validate:"required"`
 		Timestamp string `json:"timestamp" validate:"required"`
 		Type      string `json:"type"      validate:"required"`
@@ -173,7 +175,12 @@ func (h *handler) receiveEvents(ctx context.Context, channel courier.Channel, w 
 
 	var contactNames = make(map[string]string)
 	for _, contact := range payload.Contacts {
-		contactNames[contact.WaID] = contact.Profile.Name
+		if contact.WaID != "" {
+			contactNames[contact.WaID] = contact.Profile.Name
+		}
+		if contact.UserID != "" {
+			contactNames[contact.UserID] = contact.Profile.Name
+		}
 	}
 
 	// first deal with any received messages
@@ -190,7 +197,11 @@ func (h *handler) receiveEvents(ctx context.Context, channel courier.Channel, w 
 		date := time.Unix(ts, 0).UTC()
 
 		// create our URN
-		urn, err := urns.New(urns.WhatsApp, msg.From)
+		sender := msg.From
+		if sender == "" {
+			sender = msg.FromBSUID
+		}
+		urn, err := urns.New(urns.WhatsApp, sender)
 		if err != nil {
 			return nil, handlers.WriteAndLogRequestError(ctx, h, channel, w, r, errors.New("invalid whatsapp id"))
 		}
@@ -228,7 +239,10 @@ func (h *handler) receiveEvents(ctx context.Context, channel courier.Channel, w 
 		}
 
 		// create our message
-		event := h.Backend().NewIncomingMsg(ctx, channel, urn, text, msg.ID, clog).WithReceivedOn(date).WithContactName(contactNames[msg.From])
+		event := h.Backend().NewIncomingMsg(ctx, channel, urn, text, msg.ID, clog).WithReceivedOn(date).WithContactName(contactNames[sender])
+		if urnErr := whatsapp.AttachUserID(event, urn, msg.FromBSUID); urnErr != nil {
+			courier.LogRequestError(r, channel, urnErr)
+		}
 
 		// we had an error downloading media
 		if err != nil {
@@ -345,8 +359,19 @@ var turnWaIgnoreStatuses = map[string]bool{
 //   }
 // }
 
+// recipient identifies the message recipient - either a phone number (to) or a business-scoped user ID (recipient)
+type recipient struct {
+	To        string `json:"to,omitempty"`
+	Recipient string `json:"recipient,omitempty"`
+}
+
+func newRecipient(msg courier.MsgOut) recipient {
+	to, rcpt := whatsapp.RecipientFields(msg.URN())
+	return recipient{To: to, Recipient: rcpt}
+}
+
 type mtTextPayload struct {
-	To         string `json:"to"    validate:"required"`
+	recipient
 	Type       string `json:"type"  validate:"required"`
 	PreviewURL bool   `json:"preview_url,omitempty"`
 	Text       struct {
@@ -355,7 +380,7 @@ type mtTextPayload struct {
 }
 
 type mtInteractivePayload struct {
-	To          string `json:"to" validate:"required"`
+	recipient
 	Type        string `json:"type" validate:"required"`
 	Interactive struct {
 		Type   string `json:"type" validate:"required"` //"text" | "image" | "video" | "document"
@@ -421,7 +446,7 @@ type Component struct {
 }
 
 type templatePayload struct {
-	To       string `json:"to"`
+	recipient
 	Type     string `json:"type"`
 	Template struct {
 		Namespace string `json:"namespace"`
@@ -435,25 +460,25 @@ type templatePayload struct {
 }
 
 type mtAudioPayload struct {
-	To    string       `json:"to"    validate:"required"`
+	recipient
 	Type  string       `json:"type"  validate:"required"`
 	Audio *mediaObject `json:"audio"`
 }
 
 type mtDocumentPayload struct {
-	To       string       `json:"to"    validate:"required"`
+	recipient
 	Type     string       `json:"type"  validate:"required"`
 	Document *mediaObject `json:"document"`
 }
 
 type mtImagePayload struct {
-	To    string       `json:"to"    validate:"required"`
+	recipient
 	Type  string       `json:"type"  validate:"required"`
 	Image *mediaObject `json:"image"`
 }
 
 type mtVideoPayload struct {
-	To    string       `json:"to" validate:"required"`
+	recipient
 	Type  string       `json:"type" validate:"required"`
 	Video *mediaObject `json:"video"`
 }
@@ -461,6 +486,7 @@ type mtVideoPayload struct {
 func buildPayloads(ctx context.Context, msg courier.MsgOut, h *handler, clog *courier.ChannelLog) ([]any, error) {
 	var payloads []any
 	var err error
+	rcpt := newRecipient(msg)
 
 	parts := handlers.SplitMsgByChannel(msg.Channel(), msg.Text(), maxMsgLength)
 
@@ -490,15 +516,15 @@ func buildPayloads(ctx context.Context, msg courier.MsgOut, h *handler, clog *co
 			mediaPayload := &mediaObject{ID: mediaID, Link: mediaURL}
 			if strings.HasPrefix(mimeType, "audio") {
 				payload := mtAudioPayload{
-					To:   msg.URN().Path(),
-					Type: "audio",
+					recipient: rcpt,
+					Type:      "audio",
 				}
 				payload.Audio = mediaPayload
 				payloads = append(payloads, payload)
 			} else if strings.HasPrefix(mimeType, "application") || strings.HasPrefix(mimeType, "document") {
 				payload := mtDocumentPayload{
-					To:   msg.URN().Path(),
-					Type: "document",
+					recipient: rcpt,
+					Type:      "document",
 				}
 				if attachmentCount == 0 && !isInteractiveMsg {
 					mediaPayload.Caption = msg.Text()
@@ -514,8 +540,8 @@ func buildPayloads(ctx context.Context, msg courier.MsgOut, h *handler, clog *co
 				payloads = append(payloads, payload)
 			} else if strings.HasPrefix(mimeType, "image") {
 				payload := mtImagePayload{
-					To:   msg.URN().Path(),
-					Type: "image",
+					recipient: rcpt,
+					Type:      "image",
 				}
 				if attachmentCount == 0 && !isInteractiveMsg {
 					mediaPayload.Caption = msg.Text()
@@ -525,8 +551,8 @@ func buildPayloads(ctx context.Context, msg courier.MsgOut, h *handler, clog *co
 				payloads = append(payloads, payload)
 			} else if strings.HasPrefix(mimeType, "video") {
 				payload := mtVideoPayload{
-					To:   msg.URN().Path(),
-					Type: "video",
+					recipient: rcpt,
+					Type:      "video",
 				}
 				if attachmentCount == 0 && !isInteractiveMsg {
 					mediaPayload.Caption = msg.Text()
@@ -547,14 +573,14 @@ func buildPayloads(ctx context.Context, msg courier.MsgOut, h *handler, clog *co
 				var payload mtTextPayload
 				if strings.Contains(part, "https://") || strings.Contains(part, "http://") {
 					payload = mtTextPayload{
-						To:         msg.URN().Path(),
+						recipient:  rcpt,
 						Type:       "text",
 						PreviewURL: true,
 					}
 				} else {
 					payload = mtTextPayload{
-						To:   msg.URN().Path(),
-						Type: "text",
+						recipient: rcpt,
+						Type:      "text",
 					}
 				}
 				payload.Text.Body = part
@@ -566,16 +592,16 @@ func buildPayloads(ctx context.Context, msg courier.MsgOut, h *handler, clog *co
 			for i, part := range parts {
 				if i < (len(parts) - 1) { //if split into more than one message, the first parts will be text and the last interactive
 					payload := mtTextPayload{
-						To:   msg.URN().Path(),
-						Type: "text",
+						recipient: rcpt,
+						Type:      "text",
 					}
 					payload.Text.Body = part
 					payloads = append(payloads, payload)
 
 				} else {
 					payload := mtInteractivePayload{
-						To:   msg.URN().Path(),
-						Type: "interactive",
+						recipient: rcpt,
+						Type:      "interactive",
 					}
 
 					// we show buttons
@@ -628,8 +654,8 @@ func buildPayloads(ctx context.Context, msg courier.MsgOut, h *handler, clog *co
 			}
 
 			payload := templatePayload{
-				To:   msg.URN().Path(),
-				Type: "template",
+				recipient: rcpt,
+				Type:      "template",
 			}
 			payload.Template.Namespace = namespace
 			payload.Template.Name = msg.Templating().Template.Name
@@ -663,16 +689,16 @@ func buildPayloads(ctx context.Context, msg courier.MsgOut, h *handler, clog *co
 				for i, part := range parts {
 					if i < (len(parts) - 1) { //if split into more than one message, the first parts will be text and the last interactive
 						payload := mtTextPayload{
-							To:   msg.URN().Path(),
-							Type: "text",
+							recipient: rcpt,
+							Type:      "text",
 						}
 						payload.Text.Body = part
 						payloads = append(payloads, payload)
 
 					} else {
 						payload := mtInteractivePayload{
-							To:   msg.URN().Path(),
-							Type: "interactive",
+							recipient: rcpt,
+							Type:      "interactive",
 						}
 
 						// we show buttons
@@ -717,14 +743,14 @@ func buildPayloads(ctx context.Context, msg courier.MsgOut, h *handler, clog *co
 					var payload mtTextPayload
 					if strings.Contains(part, "https://") || strings.Contains(part, "http://") {
 						payload = mtTextPayload{
-							To:         msg.URN().Path(),
+							recipient:  rcpt,
 							Type:       "text",
 							PreviewURL: true,
 						}
 					} else {
 						payload = mtTextPayload{
-							To:   msg.URN().Path(),
-							Type: "text",
+							recipient: rcpt,
+							Type:      "text",
 						}
 					}
 					payload.Text.Body = part

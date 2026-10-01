@@ -107,6 +107,20 @@ type ContactReference struct {
 	ID         ContactID   `json:"id"   validate:"required"`      // for creating session timeout fires in Postgres
 	UUID       ContactUUID `json:"uuid" validate:"uuid,required"` // for creating status updates in DynamoDB
 	LastSeenOn *time.Time  `json:"last_seen_on,omitempty"`
+	OtherURNs  []urns.URN  `json:"other_urns,omitempty"`
+}
+
+// HasOtherURN returns true if the contact already has the given URN in OtherURNs
+func (c *ContactReference) HasOtherURN(urn urns.URN) bool {
+	if c == nil {
+		return false
+	}
+	for _, u := range c.OtherURNs {
+		if u == urn {
+			return true
+		}
+	}
+	return false
 }
 
 // FlowReference is a reference to a flow on a queued outgoing message
