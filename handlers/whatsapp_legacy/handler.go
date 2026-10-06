@@ -747,7 +747,11 @@ func buildPayloads(ctx context.Context, msg courier.MsgOut, h *handler, clog *co
 			payload.Template.Namespace = namespace
 			payload.Template.Name = msg.Templating().Template.Name
 			payload.Template.Language.Policy = "deterministic"
-			payload.Template.Language.Code = langCode
+			templateLang := msg.Templating().Language
+			if templateLang == "" {
+				templateLang = getSupportedLanguage(msg.Locale())
+			}
+			payload.Template.Language.Code = templateLang
 
 			for _, comp := range msg.Templating().Components {
 				// get the variables used by this component in order of their names 1, 2 etc
@@ -1212,6 +1216,7 @@ var supportedLanguages = map[i18n.Locale]string{
 	"slv":    "sl",    // Slovenian
 	"spa":    "es",    // Spanish
 	"spa-AR": "es_AR", // Spanish (ARG)
+	"spa-DO": "es_DO", // Spanish (DOM)
 	"spa-ES": "es_ES", // Spanish (SPA)
 	"spa-MX": "es_MX", // Spanish (MEX)
 	"swa":    "sw",    // Swahili

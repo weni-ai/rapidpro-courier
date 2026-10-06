@@ -644,7 +644,10 @@ func buildPayloads(ctx context.Context, msg courier.MsgOut, h *handler, clog *co
 	} else {
 		// do we have a template?
 		if msg.Templating() != nil {
-			langCode := getSupportedLanguage(msg.Locale())
+			langCode := msg.Templating().Language
+			if langCode == "" {
+				langCode = getSupportedLanguage(msg.Locale())
+			}
 			namespace := msg.Templating().Namespace
 			if namespace == "" {
 				namespace = msg.Channel().StringConfigForKey(configNamespace, "")
@@ -1023,6 +1026,7 @@ var supportedLanguages = map[i18n.Locale]string{
 	"slv":    "sl",    // Slovenian
 	"spa":    "es",    // Spanish
 	"spa-AR": "es_AR", // Spanish (ARG)
+	"spa-DO": "es_DO", // Spanish (DOM)
 	"spa-ES": "es_ES", // Spanish (SPA)
 	"spa-MX": "es_MX", // Spanish (MEX)
 	"swa":    "sw",    // Swahili
