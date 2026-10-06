@@ -1,3 +1,7 @@
+1.7.1-courier-10.2.0
+----------
+  * Add supported template languages
+
 1.7.0-courier-10.2.0
 ----------
   * Update to v10.2.0

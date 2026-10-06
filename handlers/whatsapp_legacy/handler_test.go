@@ -856,7 +856,7 @@ var defaultSendTestCases = []OutgoingTestCase{
 		},
 		ExpectedRequests: []ExpectedRequest{{
 			Path: "/v1/messages",
-			Body: `{"to":"250788123123","type":"template","template":{"namespace":"waba_namespace","name":"revive_issue","language":{"policy":"deterministic","code":"en"},"components":[{"type":"body","parameters":[{"type":"text","text":"Chef"},{"type":"text","text":"tomorrow"}]}]}}`,
+			Body: `{"to":"250788123123","type":"template","template":{"namespace":"waba_namespace","name":"revive_issue","language":{"policy":"deterministic","code":"en_US"},"components":[{"type":"body","parameters":[{"type":"text","text":"Chef"},{"type":"text","text":"tomorrow"}]}]}}`,
 		}},
 
 		ExpectedExtIDs: []string{"157b5e14568e8"},
@@ -877,7 +877,7 @@ var defaultSendTestCases = []OutgoingTestCase{
 		},
 		ExpectedRequests: []ExpectedRequest{{
 			Path: "/v1/messages",
-			Body: `{"to":"250788123123","type":"template","template":{"namespace":"waba_namespace","name":"revive_issue","language":{"policy":"deterministic","code":"en"}}}`,
+			Body: `{"to":"250788123123","type":"template","template":{"namespace":"waba_namespace","name":"revive_issue","language":{"policy":"deterministic","code":"en_US"}}}`,
 		}},
 
 		ExpectedExtIDs: []string{"157b5e14568e8"},
@@ -933,6 +933,47 @@ var defaultSendTestCases = []OutgoingTestCase{
 		ExpectedRequests: []ExpectedRequest{{
 			Path: "/v1/messages",
 			Body: `{"to":"250788123123","type":"template","template":{"namespace":"wa_template_namespace","name":"revive_issue","language":{"policy":"deterministic","code":"en_US"},"components":[{"type":"body","parameters":[{"type":"text","text":"Chef"},{"type":"text","text":"tomorrow"}]}]}}`,
+		}},
+
+		ExpectedExtIDs: []string{"157b5e14568e8"},
+	},
+	{
+		Label:     "Template Send Spanish DOM locale",
+		MsgText:   "templated message",
+		MsgURN:    "whatsapp:250788123123",
+		MsgLocale: "spa-DO",
+		MsgTemplating: `{
+			"template": {"uuid": "171f8a4d-f725-46d7-85a6-11aceff0bfe3", "name": "min_justicia_consulta"},
+			"language": "es_DO"
+		}`,
+		MockResponses: map[string][]*httpx.MockResponse{
+			"*/v1/messages": {
+				httpx.NewMockResponse(200, nil, []byte(`{ "messages": [{"id": "157b5e14568e8"}] }`)),
+			},
+		},
+		ExpectedRequests: []ExpectedRequest{{
+			Path: "/v1/messages",
+			Body: `{"to":"250788123123","type":"template","template":{"namespace":"waba_namespace","name":"min_justicia_consulta","language":{"policy":"deterministic","code":"es_DO"}}}`,
+		}},
+
+		ExpectedExtIDs: []string{"157b5e14568e8"},
+	},
+	{
+		Label:     "Template Send Spanish DOM from locale",
+		MsgText:   "templated message",
+		MsgURN:    "whatsapp:250788123123",
+		MsgLocale: "spa-DO",
+		MsgTemplating: `{
+			"template": {"uuid": "171f8a4d-f725-46d7-85a6-11aceff0bfe3", "name": "min_justicia_consulta"}
+		}`,
+		MockResponses: map[string][]*httpx.MockResponse{
+			"*/v1/messages": {
+				httpx.NewMockResponse(200, nil, []byte(`{ "messages": [{"id": "157b5e14568e8"}] }`)),
+			},
+		},
+		ExpectedRequests: []ExpectedRequest{{
+			Path: "/v1/messages",
+			Body: `{"to":"250788123123","type":"template","template":{"namespace":"waba_namespace","name":"min_justicia_consulta","language":{"policy":"deterministic","code":"es_DO"}}}`,
 		}},
 
 		ExpectedExtIDs: []string{"157b5e14568e8"},
@@ -1286,5 +1327,7 @@ func TestGetSupportedLanguage(t *testing.T) {
 	assert.Equal(t, "pt_BR", getSupportedLanguage(i18n.Locale("por-BR")))
 	assert.Equal(t, "fil", getSupportedLanguage(i18n.Locale("fil")))
 	assert.Equal(t, "fr", getSupportedLanguage(i18n.Locale("fra-CA")))
+	assert.Equal(t, "es_DO", getSupportedLanguage(i18n.Locale("spa-DO")))
+	assert.Equal(t, "es", getSupportedLanguage(i18n.Locale("spa")))
 	assert.Equal(t, "en", getSupportedLanguage(i18n.Locale("run")))
 }

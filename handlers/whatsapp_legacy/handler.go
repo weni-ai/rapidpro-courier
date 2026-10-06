@@ -582,7 +582,6 @@ func buildPayloads(ctx context.Context, msg courier.MsgOut, h *handler, clog *co
 			qrsAsList = true
 		}
 	}
-	langCode := getSupportedLanguage(msg.Locale())
 	wppVersion := msg.Channel().ConfigForKey("version", "0").(string)
 	isInteractiveMsgCompatible := semver.Compare(wppVersion, interactiveMsgMinSupVersion)
 	isInteractiveMsg := (isInteractiveMsgCompatible >= 0) && (len(qrs) > 0)
@@ -747,7 +746,11 @@ func buildPayloads(ctx context.Context, msg courier.MsgOut, h *handler, clog *co
 			payload.Template.Namespace = namespace
 			payload.Template.Name = msg.Templating().Template.Name
 			payload.Template.Language.Policy = "deterministic"
-			payload.Template.Language.Code = langCode
+			templateLang := msg.Templating().Language
+			if templateLang == "" {
+				templateLang = getSupportedLanguage(msg.Locale())
+			}
+			payload.Template.Language.Code = templateLang
 
 			for _, comp := range msg.Templating().Components {
 				// get the variables used by this component in order of their names 1, 2 etc
@@ -1212,8 +1215,17 @@ var supportedLanguages = map[i18n.Locale]string{
 	"slv":    "sl",    // Slovenian
 	"spa":    "es",    // Spanish
 	"spa-AR": "es_AR", // Spanish (ARG)
+	"spa-CL": "es_CL", // Spanish (CHL)
+	"spa-CO": "es_CO", // Spanish (COL)
+	"spa-CR": "es_CR", // Spanish (CRI)
+	"spa-DO": "es_DO", // Spanish (DOM)
+	"spa-EC": "es_EC", // Spanish (ECU)
 	"spa-ES": "es_ES", // Spanish (SPA)
+	"spa-HN": "es_HN", // Spanish (HND)
 	"spa-MX": "es_MX", // Spanish (MEX)
+	"spa-PA": "es_PA", // Spanish (PAN)
+	"spa-PE": "es_PE", // Spanish (PER)
+	"spa-UY": "es_UY", // Spanish (URY)
 	"swa":    "sw",    // Swahili
 	"swe":    "sv",    // Swedish
 	"tam":    "ta",    // Tamil
