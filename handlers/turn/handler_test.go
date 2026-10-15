@@ -47,6 +47,97 @@ var helloMsg = `{
    }]
 }`
 
+var helloMsgWithValidBSUID = `{
+  "contacts":[{
+    "profile": {
+      "name": "Jerry Cooney"
+    },
+    "wa_id": "250788123123",
+    "user_id": "US.1234"
+  }],
+  "messages": [{
+    "from": "250788123123",
+    "from_bsuid": "US.1234",
+    "id": "41",
+    "timestamp": "1454119029",
+    "text": {
+      "body": "hello world"
+    },
+    "type": "text"
+   }]
+}`
+
+var helloMsgFromBSUID = `{
+  "contacts":[{
+    "profile": {
+      "name": "Jerry Cooney"
+    },
+    "user_id": "US.1234"
+  }],
+  "messages": [{
+    "from_bsuid": "US.1234",
+    "id": "41",
+    "timestamp": "1454119029",
+    "text": {
+      "body": "hello world"
+    },
+    "type": "text"
+   }]
+}`
+
+var helloMsgBSUIDInFrom = `{
+  "contacts":[{
+    "profile": {
+      "name": "Jerry Cooney"
+    },
+    "wa_id": "US.1234"
+  }],
+  "messages": [{
+    "from": "US.1234",
+    "id": "41",
+    "timestamp": "1454119029",
+    "text": {
+      "body": "hello world"
+    },
+    "type": "text"
+   }]
+}`
+
+var helloMsgNoFromOrBSUID = `{
+  "contacts":[{
+    "profile": {
+      "name": "Jerry Cooney"
+    }
+  }],
+  "messages": [{
+    "id": "41",
+    "timestamp": "1454119029",
+    "text": {
+      "body": "hello world"
+    },
+    "type": "text"
+   }]
+}`
+
+var helloMsgWithInvalidBSUID = `{
+  "contacts":[{
+    "profile": {
+      "name": "Jerry Cooney"
+    },
+    "wa_id": "250788123123"
+  }],
+  "messages": [{
+    "from": "250788123123",
+    "from_bsuid": "foo_bar",
+    "id": "41",
+    "timestamp": "1454119029",
+    "text": {
+      "body": "hello world"
+    },
+    "type": "text"
+   }]
+}`
+
 var duplicateMsg = `{
 	"messages": [{
 	  "from": "250788123123",
@@ -350,6 +441,66 @@ var trnTestCases = []IncomingTestCase{
 		NoInvalidChannelCheck: true,
 	},
 	{
+		Label:                 "Receive Message with valid bsuid",
+		URL:                   trnReceiveURL,
+		Data:                  helloMsgWithValidBSUID,
+		ExpectedRespStatus:    200,
+		ExpectedBodyContains:  `"type":"msg"`,
+		ExpectedContactName:   Sp("Jerry Cooney"),
+		ExpectedMsgText:       Sp("hello world"),
+		ExpectedURN:           "whatsapp:250788123123",
+		ExpectedNewURN:        "whatsapp:US.1234",
+		ExpectedExternalID:    "41",
+		ExpectedDate:          time.Date(2016, 1, 30, 1, 57, 9, 0, time.UTC),
+		NoInvalidChannelCheck: true,
+	},
+	{
+		Label:                 "Receive Message from BSUID with no phone",
+		URL:                   trnReceiveURL,
+		Data:                  helloMsgFromBSUID,
+		ExpectedRespStatus:    200,
+		ExpectedBodyContains:  `"type":"msg"`,
+		ExpectedContactName:   Sp("Jerry Cooney"),
+		ExpectedMsgText:       Sp("hello world"),
+		ExpectedURN:           "whatsapp:US.1234",
+		ExpectedExternalID:    "41",
+		ExpectedDate:          time.Date(2016, 1, 30, 1, 57, 9, 0, time.UTC),
+		NoInvalidChannelCheck: true,
+	},
+	{
+		Label:                 "Receive Message with BSUID in from",
+		URL:                   trnReceiveURL,
+		Data:                  helloMsgBSUIDInFrom,
+		ExpectedRespStatus:    200,
+		ExpectedBodyContains:  `"type":"msg"`,
+		ExpectedContactName:   Sp("Jerry Cooney"),
+		ExpectedMsgText:       Sp("hello world"),
+		ExpectedURN:           "whatsapp:US.1234",
+		ExpectedExternalID:    "41",
+		ExpectedDate:          time.Date(2016, 1, 30, 1, 57, 9, 0, time.UTC),
+		NoInvalidChannelCheck: true,
+	},
+	{
+		Label:                "Receive Message with no from or from_bsuid",
+		URL:                  trnReceiveURL,
+		Data:                 helloMsgNoFromOrBSUID,
+		ExpectedRespStatus:   200,
+		ExpectedBodyContains: "invalid whatsapp id",
+	},
+	{
+		Label:                 "Receive Message with invalid bsuid, no new URN added",
+		URL:                   trnReceiveURL,
+		Data:                  helloMsgWithInvalidBSUID,
+		ExpectedRespStatus:    200,
+		ExpectedBodyContains:  `"type":"msg"`,
+		ExpectedContactName:   Sp("Jerry Cooney"),
+		ExpectedMsgText:       Sp("hello world"),
+		ExpectedURN:           "whatsapp:250788123123",
+		ExpectedExternalID:    "41",
+		ExpectedDate:          time.Date(2016, 1, 30, 1, 57, 9, 0, time.UTC),
+		NoInvalidChannelCheck: true,
+	},
+	{
 		Label:                "Receive duplicate valid message",
 		URL:                  trnReceiveURL,
 		Data:                 duplicateMsg,
@@ -597,6 +748,23 @@ var defaultSendTestCases = []OutgoingTestCase{
 			{
 				Path: "/v1/messages",
 				Body: `{"to":"250788123123","type":"text","text":{"body":"Simple Message"}}`,
+			},
+		},
+		ExpectedExtIDs: []string{"157b5e14568e8"},
+	},
+	{
+		Label:   "Plain Send with BSUID as whatsapp URN",
+		MsgText: "Simple Message",
+		MsgURN:  "whatsapp:US.1234",
+		MockResponses: map[string][]*httpx.MockResponse{
+			"*/v1/messages": {
+				httpx.NewMockResponse(201, nil, []byte(`{ "messages": [{"id": "157b5e14568e8"}] }`)),
+			},
+		},
+		ExpectedRequests: []ExpectedRequest{
+			{
+				Path: "/v1/messages",
+				Body: `{"recipient":"US.1234","type":"text","text":{"body":"Simple Message"}}`,
 			},
 		},
 		ExpectedExtIDs: []string{"157b5e14568e8"},

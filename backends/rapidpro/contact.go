@@ -10,12 +10,12 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/jmoiron/sqlx"
 	"github.com/nyaruka/courier"
 	"github.com/nyaruka/gocommon/dbutil"
 	"github.com/nyaruka/gocommon/urns"
 	"github.com/nyaruka/gocommon/uuids"
 	"github.com/nyaruka/null/v3"
+	"github.com/vinovest/sqlx"
 )
 
 // used by unit tests to slow down urn operations to test races
@@ -42,10 +42,10 @@ func (i ContactID) String() string {
 
 // Contact is our struct for a contact in the database
 type Contact struct {
-	OrgID_ OrgID               `db:"org_id"`
-	ID_    ContactID           `db:"id"`
-	UUID_  courier.ContactUUID `db:"uuid"`
-	Name_  null.String         `db:"name"`
+	OrgID_  OrgID               `db:"org_id"`
+	ID_     ContactID           `db:"id"`
+	UUID_   courier.ContactUUID `db:"uuid"`
+	Name_   null.String         `db:"name"`
 	Status_ string              `db:"status"`
 
 	URNID_ ContactURNID `db:"urn_id"`
@@ -223,4 +223,85 @@ func contactForURN(ctx context.Context, b *backend, org OrgID, channel *Channel,
 	b.stats.RecordContactCreated()
 
 	return contact, nil
+}
+
+// contactForMsg resolves the contact for an incoming message. Normally that's a lookup by (or creation from) the
+// message's primary URN. But when a WhatsApp message arrives with a phone number as its primary URN and a
+// business-scoped user ID attached as its new URN, and the phone number doesn't match an existing contact, we also
+// look for one by the BSUID so a contact created while the phone was omitted is reused rather than duplicated.
+func contactForMsg(ctx context.Context, b *backend, m *Msg, clog *courier.ChannelLog) (*Contact, error) {
+	altURN := altLookupURN(m)
+
+	if altURN == urns.NilURN {
+		return contactForURN(ctx, b, m.OrgID_, m.channel, m.URN_, m.URNAuthTokens_, m.ContactName_, true, clog)
+	}
+
+	contact, err := contactForURN(ctx, b, m.OrgID_, m.channel, m.URN_, m.URNAuthTokens_, m.ContactName_, false, clog)
+	if err != nil || contact != nil {
+		return contact, err
+	}
+
+	contact, err = contactForURN(ctx, b, m.OrgID_, m.channel, altURN, nil, "", false, clog)
+	if err != nil {
+		return nil, err
+	}
+	if contact != nil {
+		added, err := addContactURN(ctx, b, m.channel, contact, m.URN_, m.URNAuthTokens_)
+		if err != nil {
+			return nil, err
+		}
+		if !added {
+			return contactForMsg(ctx, b, m, clog)
+		}
+		return contact, nil
+	}
+
+	return contactForURN(ctx, b, m.OrgID_, m.channel, m.URN_, m.URNAuthTokens_, m.ContactName_, true, clog)
+}
+
+func altLookupURN(m *Msg) urns.URN {
+	if m.NewURN_ != nil && m.URN_.Scheme() == urns.WhatsApp.Prefix && courier.IsWhatsAppBSUID(m.NewURN_.Value) {
+		return m.NewURN_.Value
+	}
+	return urns.NilURN
+}
+
+func addContactURN(ctx context.Context, b *backend, channel *Channel, contact *Contact, urn urns.URN, authTokens map[string]string) (bool, error) {
+	tx, err := b.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("error beginning transaction: %w", err)
+	}
+
+	contactURN, err := getOrCreateContactURN(tx, channel, contact.ID_, urn, authTokens)
+	if err != nil {
+		tx.Rollback()
+		return false, fmt.Errorf("error adding URN to contact: %w", err)
+	}
+
+	if contactURN.PrevContactID != NilContactID {
+		tx.Rollback()
+		return false, nil
+	}
+
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("error committing transaction: %w", err)
+	}
+
+	contact.URNID_ = contactURN.ID
+	return true, nil
+}
+
+const sqlContactHasURN = `
+SELECT EXISTS(
+  SELECT 1 FROM contacts_contacturn
+   WHERE org_id = $1 AND contact_id = $2 AND identity = $3
+)`
+
+func contactHasURN(ctx context.Context, b *backend, orgID OrgID, contactID ContactID, urn urns.URN) (bool, error) {
+	if contactID == NilContactID {
+		return false, nil
+	}
+	var exists bool
+	err := b.db.GetContext(ctx, &exists, sqlContactHasURN, orgID, contactID, urn.Identity())
+	return exists, err
 }

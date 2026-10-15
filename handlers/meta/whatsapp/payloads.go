@@ -15,7 +15,7 @@ func GetMsgPayloads(ctx context.Context, msg courier.MsgOut, maxMsgLength int, c
 	requestPayloads := make([]SendRequest, 0)
 
 	if msg.Templating() != nil {
-		payload := SendRequest{MessagingProduct: "whatsapp", RecipientType: "individual", To: msg.URN().Path()}
+		payload := NewSendRequest(msg)
 		payload.Type = "template"
 		payload.Template = GetTemplatePayload(msg.Templating())
 		requestPayloads = append(requestPayloads, payload)
@@ -39,7 +39,7 @@ func GetMsgPayloads(ctx context.Context, msg courier.MsgOut, maxMsgLength int, c
 		menuButton := handlers.GetText("Menu", msg.Locale())
 
 		for i := 0; i < len(msgParts)+len(msg.Attachments()); i++ {
-			payload := SendRequest{MessagingProduct: "whatsapp", RecipientType: "individual", To: msg.URN().Path()}
+			payload := NewSendRequest(msg)
 
 			if len(msg.Attachments()) == 0 {
 
@@ -211,7 +211,9 @@ func GetMsgPayloads(ctx context.Context, msg courier.MsgOut, maxMsgLength int, c
 									Document *Media "json:\"document,omitempty\""
 								}{Type: "document", Document: &document}
 							} else if attType == "audio" {
-								payloadAudio := SendRequest{MessagingProduct: "whatsapp", RecipientType: "individual", To: msg.URN().Path(), Type: "audio", Audio: &Media{Link: attURL}}
+								payloadAudio := NewSendRequest(msg)
+								payloadAudio.Type = "audio"
+								payloadAudio.Audio = &Media{Link: attURL}
 
 								requestPayloads = append(requestPayloads, payloadAudio)
 

@@ -16,11 +16,12 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	dyntypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/buger/jsonparser"
 	"github.com/gomodule/redigo/redis"
-	"github.com/jmoiron/sqlx"
 	"github.com/lib/pq"
 	"github.com/nyaruka/courier"
 	"github.com/nyaruka/courier/queue"
@@ -36,6 +37,7 @@ import (
 	"github.com/nyaruka/null/v3"
 	"github.com/nyaruka/vkutil/assertvk"
 	"github.com/stretchr/testify/suite"
+	"github.com/vinovest/sqlx"
 )
 
 type BackendTestSuite struct {
@@ -124,7 +126,7 @@ func (ts *BackendTestSuite) TearDownSuite() {
 	ts.b.Stop()
 	ts.b.Cleanup()
 
-	ts.b.dynamo.Purge(context.Background())
+	ts.purgeDynamo(context.Background())
 	ts.b.s3.EmptyBucket(context.Background(), "test-attachments")
 }
 
@@ -906,7 +908,7 @@ func (ts *BackendTestSuite) TestOutgoingQueue() {
 	ts.Equal(msg.Text(), "test message")
 
 	// mark this message as dealt with
-	ts.b.OnSendComplete(ctx, msg, ts.b.NewStatusUpdate(msg.Channel(), msg.ID(), courier.MsgStatusWired, clog), clog)
+	ts.b.OnSendComplete(ctx, msg, ts.b.NewStatusUpdate(msg.Channel(), msg.ID(), courier.MsgStatusWired, clog), clog, urns.NilURN)
 
 	// this message should now be marked as sent
 	sent, err := ts.b.WasMsgSent(ctx, msg.ID())
@@ -1053,7 +1055,7 @@ func (ts *BackendTestSuite) TestWriteChanneLog() {
 	time.Sleep(time.Second) // give writer time to write this
 
 	// check that we can read the log back from DynamoDB
-	item1, err := ts.b.dynamo.GetItem(ctx, GetChannelLogKey(clog1))
+	item1, err := ts.getDynamoItem(ctx, GetChannelLogKey(clog1))
 	ts.NoError(err)
 	ts.Equal(1, item1.OrgID)
 	ts.Equal("token_refresh", item1.Data["type"])
@@ -1074,7 +1076,7 @@ func (ts *BackendTestSuite) TestWriteChanneLog() {
 	time.Sleep(time.Second) // give writer time to write this
 
 	// check that we can read the log back from DynamoDB
-	item2, err := ts.b.dynamo.GetItem(ctx, GetChannelLogKey(clog2))
+	item2, err := ts.getDynamoItem(ctx, GetChannelLogKey(clog2))
 	ts.NoError(err)
 	ts.Equal("msg_send", item2.Data["type"])
 
@@ -1087,7 +1089,7 @@ func (ts *BackendTestSuite) TestWriteChanneLog() {
 
 	time.Sleep(time.Second) // give writer time to.. not write this
 
-	item3, err := ts.b.dynamo.GetItem(ctx, GetChannelLogKey(clog3))
+	item3, err := ts.getDynamoItem(ctx, GetChannelLogKey(clog3))
 	ts.NoError(err)
 	ts.Nil(item3)
 
@@ -1098,7 +1100,7 @@ func (ts *BackendTestSuite) TestWriteChanneLog() {
 
 	time.Sleep(time.Second) // give writer time to write this because it's an error
 
-	item4, err := ts.b.dynamo.GetItem(ctx, GetChannelLogKey(clog4))
+	item4, err := ts.getDynamoItem(ctx, GetChannelLogKey(clog4))
 	ts.NoError(err)
 	ts.NotNil(item4)
 
@@ -1112,11 +1114,11 @@ func (ts *BackendTestSuite) TestWriteChanneLog() {
 
 	time.Sleep(time.Second) // give writer time to.. not write this
 
-	item5, err := ts.b.dynamo.GetItem(ctx, GetChannelLogKey(clog5))
+	item5, err := ts.getDynamoItem(ctx, GetChannelLogKey(clog5))
 	ts.NoError(err)
 	ts.Nil(item5)
 
-	count, err := ts.b.dynamo.Count(ctx)
+	count, err := ts.countDynamoItems(ctx)
 	ts.NoError(err)
 	ts.Equal(3, count)
 }
@@ -1671,3 +1673,58 @@ func must(err error) {
 
 // if just checking an error is nil noError(err) reads better than must(err)
 var noError = must
+
+func (ts *BackendTestSuite) getDynamoItem(ctx context.Context, key DynamoKey) (*DynamoItem, error) {
+	keyAttrs, err := attributevalue.MarshalMap(key)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := ts.b.dynamo.Client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: aws.String(ts.b.dynamo.TableName(dynamoMainTable)),
+		Key:       keyAttrs,
+	})
+	if err != nil || resp.Item == nil {
+		return nil, err
+	}
+
+	item := &DynamoItem{}
+	if err := attributevalue.UnmarshalMap(resp.Item, item); err != nil {
+		return nil, err
+	}
+	return item, nil
+}
+
+func (ts *BackendTestSuite) countDynamoItems(ctx context.Context) (int, error) {
+	resp, err := ts.b.dynamo.Client.Scan(ctx, &dynamodb.ScanInput{
+		TableName: aws.String(ts.b.dynamo.TableName(dynamoMainTable)),
+		Select:    dyntypes.SelectCount,
+	})
+	if err != nil {
+		return 0, err
+	}
+	return int(resp.Count), nil
+}
+
+func (ts *BackendTestSuite) purgeDynamo(ctx context.Context) error {
+	table := aws.String(ts.b.dynamo.TableName(dynamoMainTable))
+
+	var lastKey map[string]dyntypes.AttributeValue
+	for {
+		resp, err := ts.b.dynamo.Client.Scan(ctx, &dynamodb.ScanInput{TableName: table, ExclusiveStartKey: lastKey})
+		if err != nil {
+			return err
+		}
+
+		for _, item := range resp.Items {
+			key := map[string]dyntypes.AttributeValue{"PK": item["PK"], "SK": item["SK"]}
+			if _, err := ts.b.dynamo.Client.DeleteItem(ctx, &dynamodb.DeleteItemInput{TableName: table, Key: key}); err != nil {
+				return err
+			}
+		}
+
+		if lastKey = resp.LastEvaluatedKey; lastKey == nil {
+			return nil
+		}
+	}
+}

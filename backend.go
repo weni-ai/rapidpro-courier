@@ -80,7 +80,7 @@ type Backend interface {
 	ClearMsgSent(context.Context, MsgID) error
 
 	// OnSendComplete is called when the sender has finished trying to send a message
-	OnSendComplete(context.Context, MsgOut, StatusUpdate, *ChannelLog)
+	OnSendComplete(context.Context, MsgOut, StatusUpdate, *ChannelLog, urns.URN)
 
 	// OnReceiveComplete is called when the server has finished handling an incoming request
 	OnReceiveComplete(context.Context, Channel, []Event, *ChannelLog)

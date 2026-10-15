@@ -4,15 +4,16 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
-	"github.com/nyaruka/gocommon/aws/dynamo"
+	"github.com/nyaruka/courier/utils/dynsvc"
 	"github.com/nyaruka/gocommon/syncx"
 )
+
+const dynamoMainTable = "Main"
 
 type DynamoKey struct {
 	PK string `dynamodbav:"PK"`
@@ -32,20 +33,20 @@ type DynamoWriter struct {
 	*syncx.Batcher[*DynamoItem]
 }
 
-func NewDynamoWriter(tbl *dynamo.Table[DynamoKey, DynamoItem], wg *sync.WaitGroup) *DynamoWriter {
+func NewDynamoWriter(ds *dynsvc.Service) *DynamoWriter {
 	return &DynamoWriter{
 		Batcher: syncx.NewBatcher(func(batch []*DynamoItem) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			defer cancel()
 
-			if err := writeDynamoBatch(ctx, tbl, batch); err != nil {
+			if err := writeDynamoBatch(ctx, ds, batch); err != nil {
 				slog.Error("error writing logs to dynamo", "error", err)
 			}
-		}, 25, time.Millisecond*500, 1000, wg),
+		}, 25, time.Millisecond*500, 1000),
 	}
 }
 
-func writeDynamoBatch(ctx context.Context, tbl *dynamo.Table[DynamoKey, DynamoItem], batch []*DynamoItem) error {
+func writeDynamoBatch(ctx context.Context, ds *dynsvc.Service, batch []*DynamoItem) error {
 	writeReqs := make([]types.WriteRequest, len(batch))
 
 	for i, item := range batch {
@@ -56,8 +57,8 @@ func writeDynamoBatch(ctx context.Context, tbl *dynamo.Table[DynamoKey, DynamoIt
 		writeReqs[i] = types.WriteRequest{PutRequest: &types.PutRequest{Item: d}}
 	}
 
-	resp, err := tbl.Client.BatchWriteItem(ctx, &dynamodb.BatchWriteItemInput{
-		RequestItems: map[string][]types.WriteRequest{tbl.Name(): writeReqs},
+	resp, err := ds.Client.BatchWriteItem(ctx, &dynamodb.BatchWriteItemInput{
+		RequestItems: map[string][]types.WriteRequest{ds.TableName(dynamoMainTable): writeReqs},
 	})
 	if err != nil {
 		return err

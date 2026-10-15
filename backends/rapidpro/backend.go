@@ -22,11 +22,10 @@ import (
 	cwtypes "github.com/aws/aws-sdk-go-v2/service/cloudwatch/types"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/gomodule/redigo/redis"
-	"github.com/jmoiron/sqlx"
 	"github.com/nyaruka/courier"
 	"github.com/nyaruka/courier/queue"
+	"github.com/nyaruka/courier/utils/dynsvc"
 	"github.com/nyaruka/gocommon/aws/cwatch"
-	"github.com/nyaruka/gocommon/aws/dynamo"
 	"github.com/nyaruka/gocommon/aws/s3x"
 	"github.com/nyaruka/gocommon/cache"
 	"github.com/nyaruka/gocommon/dbutil"
@@ -36,6 +35,7 @@ import (
 	"github.com/nyaruka/gocommon/urns"
 	"github.com/nyaruka/gocommon/uuids"
 	"github.com/nyaruka/vkutil"
+	"github.com/vinovest/sqlx"
 )
 
 // the name for our message queue
@@ -59,7 +59,7 @@ type backend struct {
 
 	db           *sqlx.DB
 	rp           *redis.Pool
-	dynamo       *dynamo.Table[DynamoKey, DynamoItem]
+	dynamo       *dynsvc.Service
 	s3           *s3x.Service
 	cw           *cwatch.Service
 	systemUserID UserID
@@ -173,12 +173,11 @@ func (b *backend) Start() error {
 		queue.StartDethrottler(b.rp, b.stopChan, b.waitGroup, msgQueueName)
 	}
 
-	// setup DynamoDB main table
-	dc, err := dynamo.NewClient(b.config.AWSAccessKeyID, b.config.AWSSecretAccessKey, b.config.AWSRegion, b.config.DynamoEndpoint)
+	// setup DynamoDB
+	b.dynamo, err = dynsvc.NewService(b.config.AWSAccessKeyID, b.config.AWSSecretAccessKey, b.config.AWSRegion, b.config.DynamoEndpoint, b.config.DynamoTablePrefix)
 	if err != nil {
 		return err
 	}
-	b.dynamo = dynamo.NewTable[DynamoKey, DynamoItem](dc, b.config.DynamoTablePrefix+"Main")
 
 	if err := b.dynamo.Test(ctx); err != nil {
 		log.Error("dynamodb not reachable", "error", err)
@@ -225,11 +224,11 @@ func (b *backend) Start() error {
 	}
 
 	// create our batched writers and start them
-	b.statusWriter = NewStatusWriter(b, b.config.SpoolDir, b.writerWG)
-	b.statusWriter.Start()
+	b.statusWriter = NewStatusWriter(b, b.config.SpoolDir)
+	b.statusWriter.Start(b.writerWG)
 
-	b.dynamoWriter = NewDynamoWriter(b.dynamo, b.writerWG)
-	b.dynamoWriter.Start()
+	b.dynamoWriter = NewDynamoWriter(b.dynamo)
+	b.dynamoWriter.Start(b.writerWG)
 
 	// store the system user id
 	b.systemUserID, err = getSystemUserID(ctx, b.db)
@@ -498,7 +497,7 @@ func (b *backend) ClearMsgSent(ctx context.Context, id courier.MsgID) error {
 }
 
 // OnSendComplete is called when the sender has finished trying to send a message
-func (b *backend) OnSendComplete(ctx context.Context, msg courier.MsgOut, status courier.StatusUpdate, clog *courier.ChannelLog) {
+func (b *backend) OnSendComplete(ctx context.Context, msg courier.MsgOut, status courier.StatusUpdate, clog *courier.ChannelLog, newURN urns.URN) {
 	log := slog.With("channel", msg.Channel().UUID(), "msg", msg.UUID(), "clog", clog.UUID, "status", status)
 
 	rc := b.rp.Get()
@@ -522,6 +521,21 @@ func (b *backend) OnSendComplete(ctx context.Context, msg courier.MsgOut, status
 	if wasSuccess && dbMsg.Session_ != nil && dbMsg.Session_.Timeout > 0 {
 		if err := b.insertTimeoutFire(ctx, dbMsg); err != nil {
 			log.Error("unable to update session timeout", "error", err, "session_uuid", dbMsg.Session_.UUID)
+		}
+	}
+
+	if wasSuccess && courier.IsWhatsAppBSUID(newURN) && newURN != msg.URN() {
+		alreadyHas, err := contactHasURN(ctx, b, dbMsg.OrgID_, dbMsg.ContactID_, newURN)
+		if err != nil {
+			log.Error("unable to check contact URN", "error", err, "urn", newURN)
+		} else if !alreadyHas {
+			dbChannel := msg.Channel().(*Channel)
+			if err := queueMailroomTask(ctx, rc, "contact_changed", dbChannel.OrgID_, dbMsg.ContactID_, map[string]any{
+				"channel_id": dbChannel.ID_,
+				"new_urn":    &NewURNSpec{Value: newURN, Action: "append"},
+			}); err != nil {
+				log.Error("unable to queue contact_changed task", "error", err, "urn", newURN)
+			}
 		}
 	}
 

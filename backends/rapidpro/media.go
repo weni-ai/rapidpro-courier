@@ -5,9 +5,9 @@ import (
 	"database/sql"
 	"path/filepath"
 
-	"github.com/jmoiron/sqlx"
 	"github.com/nyaruka/courier"
 	"github.com/nyaruka/gocommon/uuids"
+	"github.com/vinovest/sqlx"
 )
 
 type Media struct {
