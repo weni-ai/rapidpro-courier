@@ -28,7 +28,6 @@ CREATE TABLE channels_channel (
     country character varying(2),
     config jsonb NOT NULL,
     role character varying(4) NOT NULL,
-    log_policy character varying(1) NOT NULL,
     org_id integer references orgs_org(id) on delete cascade
 );
 
@@ -94,11 +93,11 @@ CREATE TABLE msgs_msg (
     contact_urn_id integer REFERENCES contacts_contacturn(id) ON DELETE CASCADE,
     --broadcast_id integer REFERENCES msgs_broadcast(id) ON DELETE CASCADE,
     --flow_id integer REFERENCES flows_flow(id) ON DELETE CASCADE,
-    --ticket_id integer REFERENCES tickets_ticket(id) ON DELETE CASCADE,
+    --ticket_uuid uuid,
     created_by_id integer REFERENCES users_user(id),
     text text NOT NULL,
     attachments character varying(255)[] NULL,
-    quick_replies character varying(64)[] NULL,
+    quickreplies JSONB NULL,
     optin_id integer REFERENCES msgs_optin(id) ON DELETE CASCADE,
     locale character varying(6) NULL,
     created_on timestamp with time zone NOT NULL,
@@ -114,7 +113,7 @@ CREATE TABLE msgs_msg (
     error_count integer NOT NULL,
     next_attempt timestamp with time zone,
     failed_reason character varying(1),
-    external_id character varying(255),
+    external_identifier character varying(255),
     log_uuids uuid[]
 );
 

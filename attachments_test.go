@@ -3,11 +3,13 @@ package courier_test
 import (
 	"context"
 	"errors"
+	"net"
 	"testing"
 	"time"
 
-	"github.com/nyaruka/courier"
-	"github.com/nyaruka/courier/test"
+	"github.com/nyaruka/courier/v26"
+	"github.com/nyaruka/courier/v26/runtime"
+	"github.com/nyaruka/courier/v26/test"
 	"github.com/nyaruka/gocommon/httpx"
 	"github.com/nyaruka/gocommon/urns"
 	"github.com/nyaruka/gocommon/uuids"
@@ -17,8 +19,12 @@ import (
 func TestFetchAndStoreAttachment(t *testing.T) {
 	testJPG := test.ReadFile("test/testdata/test.jpg")
 
-	defer httpx.SetRequestor(httpx.DefaultRequestor)
-	httpx.SetRequestor(httpx.NewMockRequestor(map[string][]*httpx.MockResponse{
+	defer uuids.SetGenerator(uuids.DefaultGenerator)
+	uuids.SetGenerator(uuids.NewSeededGenerator(1234, time.Now))
+
+	ctx := context.Background()
+	rt := runtime.NewTestRuntime(runtime.NewDefaultConfig())
+	rt.HTTP.Transport = httpx.WithMocks(nil, map[string][]*httpx.MockResponse{
 		"http://mock.com/media/hello.jpg": {
 			httpx.NewMockResponse(200, nil, testJPG),
 		},
@@ -40,12 +46,7 @@ func TestFetchAndStoreAttachment(t *testing.T) {
 		"http://mock.com/media/hello7": {
 			httpx.NewMockResponse(200, nil, []byte(`hello world`)),
 		},
-	}))
-
-	defer uuids.SetGenerator(uuids.DefaultGenerator)
-	uuids.SetGenerator(uuids.NewSeededGenerator(1234, time.Now))
-
-	ctx := context.Background()
+	})
 	mb := test.NewMockBackend()
 
 	mockChannel := test.NewMockChannel("e4bb1578-29da-4fa5-a214-9da19dd24230", "MCK", "2020", "US", []string{urns.Phone.Prefix}, map[string]any{})
@@ -53,7 +54,7 @@ func TestFetchAndStoreAttachment(t *testing.T) {
 
 	clog := courier.NewChannelLogForAttachmentFetch(mockChannel, []string{"sesame"})
 
-	att, err := courier.FetchAndStoreAttachment(ctx, mb, mockChannel, "http://mock.com/media/hello.jpg", clog)
+	att, err := courier.FetchAndStoreAttachment(ctx, rt, mb, mockChannel, "http://mock.com/media/hello.jpg", clog)
 	assert.NoError(t, err)
 	assert.Equal(t, "image/jpeg", att.ContentType)
 	assert.Equal(t, "https://backend.com/attachments/cdf7ed27-5ad5-4028-b664-880fc7581c77.jpg", att.URL)
@@ -64,7 +65,7 @@ func TestFetchAndStoreAttachment(t *testing.T) {
 	assert.Len(t, clog.HttpLogs, 1)
 	assert.Equal(t, "http://mock.com/media/hello.jpg", clog.HttpLogs[0].URL)
 
-	att, err = courier.FetchAndStoreAttachment(ctx, mb, mockChannel, "http://mock.com/media/hello2", clog)
+	att, err = courier.FetchAndStoreAttachment(ctx, rt, mb, mockChannel, "http://mock.com/media/hello2", clog)
 	assert.NoError(t, err)
 	assert.Equal(t, "image/jpeg", att.ContentType)
 	assert.Equal(t, "https://backend.com/attachments/547deaf7-7620-4434-95b3-58675999c4b7.jpg", att.URL)
@@ -76,7 +77,7 @@ func TestFetchAndStoreAttachment(t *testing.T) {
 	assert.Equal(t, "http://mock.com/media/hello2", clog.HttpLogs[1].URL)
 
 	// a non-200 response should return an unavailable attachment
-	att, err = courier.FetchAndStoreAttachment(ctx, mb, mockChannel, "http://mock.com/media/hello.mp3", clog)
+	att, err = courier.FetchAndStoreAttachment(ctx, rt, mb, mockChannel, "http://mock.com/media/hello.mp3", clog)
 	assert.NoError(t, err)
 	assert.Equal(t, &courier.Attachment{ContentType: "unavailable", URL: "http://mock.com/media/hello.mp3"}, att)
 
@@ -86,17 +87,17 @@ func TestFetchAndStoreAttachment(t *testing.T) {
 	assert.Len(t, mb.SavedAttachments(), 2)
 
 	// same for a connection error
-	att, err = courier.FetchAndStoreAttachment(ctx, mb, mockChannel, "http://mock.com/media/hello.pdf", clog)
+	att, err = courier.FetchAndStoreAttachment(ctx, rt, mb, mockChannel, "http://mock.com/media/hello.pdf", clog)
 	assert.NoError(t, err)
 	assert.Equal(t, &courier.Attachment{ContentType: "unavailable", URL: "http://mock.com/media/hello.pdf"}, att)
 
-	att, err = courier.FetchAndStoreAttachment(ctx, mb, mockChannel, "http://mock.com/media/hello3", clog)
+	att, err = courier.FetchAndStoreAttachment(ctx, rt, mb, mockChannel, "http://mock.com/media/hello3", clog)
 	assert.NoError(t, err)
 	assert.Equal(t, "image/jpeg", att.ContentType)
 	assert.Equal(t, "https://backend.com/attachments/338ff339-5663-49ed-8ef6-384876655d1b.jpg", att.URL)
 	assert.Equal(t, 17301, att.Size)
 
-	att, err = courier.FetchAndStoreAttachment(ctx, mb, mockChannel, "http://mock.com/media/hello7", clog)
+	att, err = courier.FetchAndStoreAttachment(ctx, rt, mb, mockChannel, "http://mock.com/media/hello7", clog)
 	assert.NoError(t, err)
 	assert.Equal(t, "application/octet-stream", att.ContentType)
 	assert.Equal(t, "https://backend.com/attachments/9b955e36-ac16-4c6b-8ab6-9b9af5cd042a.", att.URL)
@@ -105,7 +106,37 @@ func TestFetchAndStoreAttachment(t *testing.T) {
 	// an actual error on our part should be returned as an error
 	mb.SetStorageError(errors.New("boom"))
 
-	att, err = courier.FetchAndStoreAttachment(ctx, mb, mockChannel, "http://mock.com/media/hello.txt", clog)
+	att, err = courier.FetchAndStoreAttachment(ctx, rt, mb, mockChannel, "http://mock.com/media/hello.txt", clog)
 	assert.EqualError(t, err, "boom")
 	assert.Nil(t, att)
+}
+
+func TestFetchAndStoreAttachmentAccessDenied(t *testing.T) {
+	defer uuids.SetGenerator(uuids.DefaultGenerator)
+	uuids.SetGenerator(uuids.NewSeededGenerator(1234, time.Now))
+
+	ctx := context.Background()
+
+	rt := runtime.NewTestRuntime(runtime.NewDefaultConfig())
+
+	// wrap the transport in access control that blocks loopback, so a fetch of a disallowed host is
+	// rejected before any connection is made; the mocking transport underneath has no entries and so
+	// would panic if a request ever reached it, guarding against the access check silently passing
+	access := httpx.NewAccessConfig(time.Second, []net.IP{net.ParseIP("127.0.0.1")}, nil)
+	rt.HTTP.Transport = httpx.WithAccessControl(httpx.WithMocks(nil, map[string][]*httpx.MockResponse{}), access)
+
+	mb := test.NewMockBackend()
+	mockChannel := test.NewMockChannel("e4bb1578-29da-4fa5-a214-9da19dd24230", "MCK", "2020", "US", []string{urns.Phone.Prefix}, map[string]any{})
+	mb.AddChannel(mockChannel)
+
+	clog := courier.NewChannelLogForAttachmentFetch(mockChannel, nil)
+
+	// a request denied by the SSRF blocklist should yield an "unavailable" attachment rather than an error
+	att, err := courier.FetchAndStoreAttachment(ctx, rt, mb, mockChannel, "http://127.0.0.1/media/blocked.jpg", clog)
+	assert.NoError(t, err)
+	assert.Equal(t, &courier.Attachment{ContentType: "unavailable", URL: "http://127.0.0.1/media/blocked.jpg"}, att)
+
+	// nothing is saved to storage, but the denied request is still logged
+	assert.Empty(t, mb.SavedAttachments())
+	assert.Len(t, clog.HttpLogs, 1)
 }

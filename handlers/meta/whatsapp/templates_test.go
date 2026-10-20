@@ -3,9 +3,9 @@ package whatsapp_test
 import (
 	"testing"
 
-	"github.com/nyaruka/courier/core/models"
-	"github.com/nyaruka/courier/handlers/meta/whatsapp"
-	"github.com/nyaruka/courier/test"
+	"github.com/nyaruka/courier/v26/core/models"
+	"github.com/nyaruka/courier/v26/handlers/meta/whatsapp"
+	"github.com/nyaruka/courier/v26/test"
 	"github.com/nyaruka/gocommon/jsonx"
 	"github.com/stretchr/testify/assert"
 )
@@ -84,7 +84,9 @@ func TestGetTemplatePayload(t *testing.T) {
 				Name:     "Update",
 				Language: &whatsapp.Language{Policy: "deterministic", Code: "en"},
 				Components: []*whatsapp.Component{
-					{Type: "header", Params: []*whatsapp.Param{{Type: "image", Image: &whatsapp.Media{Link: "http://example.com/cat2.jpg"}}}},
+					{Type: "header", Params: []*whatsapp.Param{{Type: "image", Image: &struct {
+						Link string "json:\"link,omitempty\""
+					}{Link: "http://example.com/cat2.jpg"}}}},
 					{Type: "body", Params: []*whatsapp.Param{{Type: "text", Text: "Hello"}, {Type: "text", Text: "Bob"}}},
 				},
 			},
@@ -115,7 +117,9 @@ func TestGetTemplatePayload(t *testing.T) {
 				Name:     "Update",
 				Language: &whatsapp.Language{Policy: "deterministic", Code: "en"},
 				Components: []*whatsapp.Component{
-					{Type: "header", Params: []*whatsapp.Param{{Type: "video", Video: &whatsapp.Media{Link: "http://example.com/video.mp4"}}}},
+					{Type: "header", Params: []*whatsapp.Param{{Type: "video", Video: &struct {
+						Link string "json:\"link,omitempty\""
+					}{Link: "http://example.com/video.mp4"}}}},
 					{Type: "body", Params: []*whatsapp.Param{{Type: "text", Text: "Hello"}, {Type: "text", Text: "Bob"}}},
 				},
 			},
@@ -146,7 +150,10 @@ func TestGetTemplatePayload(t *testing.T) {
 				Name:     "Update",
 				Language: &whatsapp.Language{Policy: "deterministic", Code: "en"},
 				Components: []*whatsapp.Component{
-					{Type: "header", Params: []*whatsapp.Param{{Type: "document", Document: &whatsapp.Media{Link: "http://example.com/doc.pdf", Filename: "doc.pdf"}}}},
+					{Type: "header", Params: []*whatsapp.Param{{Type: "document", Document: &struct {
+						Link     string "json:\"link,omitempty\""
+						Filename string `json:"filename,omitempty"`
+					}{Link: "http://example.com/doc.pdf", Filename: "doc.pdf"}}}},
 					{Type: "body", Params: []*whatsapp.Param{{Type: "text", Text: "Hello"}, {Type: "text", Text: "Bob"}}},
 				},
 			},
@@ -177,8 +184,44 @@ func TestGetTemplatePayload(t *testing.T) {
 				Name:     "Update",
 				Language: &whatsapp.Language{Policy: "deterministic", Code: "en"},
 				Components: []*whatsapp.Component{
-					{Type: "header", Params: []*whatsapp.Param{{Type: "document", Document: &whatsapp.Media{Link: "http://example.com/doc.pdf", Filename: "doc.pdf"}}}},
+					{Type: "header", Params: []*whatsapp.Param{{Type: "document", Document: &struct {
+						Link     string "json:\"link,omitempty\""
+						Filename string `json:"filename,omitempty"`
+					}{Link: "http://example.com/doc.pdf", Filename: "doc.pdf"}}}},
 					{Type: "body", Params: []*whatsapp.Param{{Type: "text", Text: "Hello"}, {Type: "text", Text: "Bob"}}},
+				},
+			},
+		},
+		{
+			templating: `{
+				"template": {"uuid": "4ed5000f-5c94-4143-9697-b7cbd230a381", "name": "Update"},
+				"language": "en",
+				"components": [
+					{
+						"type": "body",
+						"name": "body",
+						"variables": {"1": 0, "2": 1, "3": 2, "10": 3, "11": 4}
+					}
+				],
+				"variables": [
+					{"type": "text", "value": "var1"},
+					{"type": "text", "value": "var2"},
+					{"type": "text", "value": "var3"},
+					{"type": "text", "value": "var10"},
+					{"type": "text", "value": "var11"}
+				]
+			}`,
+			expected: &whatsapp.Template{
+				Name:     "Update",
+				Language: &whatsapp.Language{Policy: "deterministic", Code: "en"},
+				Components: []*whatsapp.Component{
+					{Type: "body", Params: []*whatsapp.Param{
+						{Type: "text", Text: "var1"},
+						{Type: "text", Text: "var2"},
+						{Type: "text", Text: "var3"},
+						{Type: "text", Text: "var10"},
+						{Type: "text", Text: "var11"},
+					}},
 				},
 			},
 		},

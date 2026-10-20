@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/lib/pq"
-	"github.com/nyaruka/courier/runtime"
+	"github.com/nyaruka/courier/v26/runtime"
 	"github.com/nyaruka/gocommon/i18n"
 	"github.com/nyaruka/gocommon/urns"
 	"github.com/nyaruka/gocommon/uuids"
@@ -64,14 +64,6 @@ const NilChannelAddress = ChannelAddress("")
 func (a ChannelAddress) String() string {
 	return string(a)
 }
-
-type LogPolicy string
-
-const (
-	LogPolicyNone   = "N"
-	LogPolicyErrors = "E"
-	LogPolicyAll    = "A"
-)
 
 const (
 	// ConfigAPIKey is a constant key for channel configs
@@ -141,7 +133,6 @@ type Channel struct {
 	Country_     sql.NullString `db:"country"`
 	Config_      null.Map[any]  `db:"config"`
 	Role_        string         `db:"role"`
-	LogPolicy    LogPolicy      `db:"log_policy"`
 
 	OrgConfig_ null.Map[any] `db:"org_config"`
 	OrgIsAnon_ bool          `db:"org_is_anon"`
@@ -267,7 +258,6 @@ SELECT
 	c.country,
 	c.config,
 	c.role,
-	c.log_policy,
 	o.config AS org_config,
 	o.is_anon AS org_is_anon
   FROM channels_channel c
@@ -296,7 +286,6 @@ SELECT
 	c.country,
 	c.config,
 	c.role,
-	c.log_policy,
 	o.config AS org_config,
 	o.is_anon AS org_is_anon
   FROM channels_channel c

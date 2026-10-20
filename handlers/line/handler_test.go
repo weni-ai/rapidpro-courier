@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nyaruka/courier"
-	"github.com/nyaruka/courier/core/models"
-	. "github.com/nyaruka/courier/handlers"
-	"github.com/nyaruka/courier/test"
+	"github.com/nyaruka/courier/v26"
+	"github.com/nyaruka/courier/v26/core/models"
+	. "github.com/nyaruka/courier/v26/handlers"
+	"github.com/nyaruka/courier/v26/test"
 	"github.com/nyaruka/gocommon/httpx"
 	"github.com/nyaruka/gocommon/urns"
 	"github.com/stretchr/testify/assert"
@@ -491,7 +491,7 @@ var defaultSendTestCases = []OutgoingTestCase{
 		Label:           "Quick Reply",
 		MsgText:         "Are you happy?",
 		MsgURN:          "line:uabcdefghij",
-		MsgQuickReplies: []models.QuickReply{{Text: "Yes"}, {Text: "No"}},
+		MsgQuickReplies: []models.QuickReply{{Type: "text", Text: "Yes"}, {Type: "text", Text: "No"}},
 		MockResponses: map[string][]*httpx.MockResponse{
 			"https://api.line.me/v2/bot/message/push": {httpx.NewMockResponse(200, nil, []byte(`{}`))},
 		},
@@ -502,11 +502,25 @@ var defaultSendTestCases = []OutgoingTestCase{
 		},
 	},
 	{
-		Label:           "Quick Reply combined and attachment",
+		Label:           "Location Action Quick Reply",
+		MsgText:         "Where are you?",
+		MsgURN:          "line:uabcdefghij",
+		MsgQuickReplies: []models.QuickReply{{Type: "location", Text: "Share Pin"}, {Type: "text", Text: "No"}},
+		MockResponses: map[string][]*httpx.MockResponse{
+			"https://api.line.me/v2/bot/message/push": {httpx.NewMockResponse(200, nil, []byte(`{}`))},
+		},
+		ExpectedRequests: []ExpectedRequest{
+			{
+				Body: `{"to":"uabcdefghij","messages":[{"type":"text","text":"Where are you?","quickReply":{"items":[{"type":"action","action":{"type":"location","label":"Share Pin"}},{"type":"action","action":{"type":"message","label":"No","text":"No"}}]}}]}`,
+			},
+		},
+	},
+	{
+		Label:           "Quick Reply Combined and Attachment",
 		MsgText:         "Are you happy?",
 		MsgURN:          "line:uabcdefghij",
 		MsgAttachments:  []string{"image/jpeg:http://mock.com/1234/test.jpg"},
-		MsgQuickReplies: []models.QuickReply{{Text: "Yes"}, {Text: "No"}},
+		MsgQuickReplies: []models.QuickReply{{Type: "text", Text: "Yes"}, {Type: "text", Text: "No"}},
 		MockResponses: map[string][]*httpx.MockResponse{
 			"https://api.line.me/v2/bot/message/push": {httpx.NewMockResponse(200, nil, []byte(`{}`))},
 		},
@@ -517,12 +531,12 @@ var defaultSendTestCases = []OutgoingTestCase{
 		},
 	},
 	{
-		Label:                   "Long messsage, Quick Reply combined and attachment",
+		Label:                   "Long Message, Quick Reply Combined and Attachment",
 		MsgText:                 "This is a longer message than 160 characters and will cause us to split it into two separate parts, isn't that right but it is even longer than before I say, I need to keep adding more things to make it work",
 		MsgURN:                  "line:uabcdefghij",
 		MsgResponseToExternalID: "nHuyWiB7yP5Zw52FIkcQobQuGDXCTA",
 		MsgAttachments:          []string{"image/jpeg:http://mock.com/1234/test.jpg"},
-		MsgQuickReplies:         []models.QuickReply{{Text: "Yes"}, {Text: "No"}},
+		MsgQuickReplies:         []models.QuickReply{{Type: "text", Text: "Yes"}, {Type: "text", Text: "No"}},
 		MockResponses: map[string][]*httpx.MockResponse{
 			"https://api.line.me/v2/bot/message/reply": {httpx.NewMockResponse(200, nil, []byte(`{}`))},
 		},
@@ -605,10 +619,8 @@ func TestOutgoing(t *testing.T) {
 }
 
 func TestBuildAttachmentRequest(t *testing.T) {
-	mb := test.NewMockBackend()
-
 	lnHandler := &handler{NewBaseHandler(models.ChannelType("LN"), "Line")}
-	req, _ := lnHandler.BuildAttachmentRequest(context.Background(), mb, testChannels[0], "https://example.org/v1/media/41", nil)
+	req, _ := lnHandler.BuildAttachmentRequest(context.Background(), testChannels[0], "https://example.org/v1/media/41", nil)
 	assert.Equal(t, "https://example.org/v1/media/41", req.URL.String())
 	assert.Equal(t, "Bearer the-auth-token", req.Header.Get("Authorization"))
 }

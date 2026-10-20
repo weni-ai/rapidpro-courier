@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/go-playground/validator/v10"
-	"github.com/nyaruka/courier/core/models"
+	"github.com/nyaruka/courier/v26/core/models"
 	"github.com/nyaruka/gocommon/urns"
 )
 
@@ -135,7 +135,7 @@ func NewStatusData(status StatusUpdate) StatusData {
 		"status",
 		status.ChannelUUID(),
 		status.Status(),
-		status.ExternalID(),
+		status.ExternalIdentifier(),
 	}
 }
 

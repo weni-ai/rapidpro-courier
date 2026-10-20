@@ -58,15 +58,6 @@ type SendResponse struct {
 	} `json:"error"`
 }
 
-type FeedbackQuestion struct {
-	Type     string `json:"type"`
-	Payload  string `json:"payload"`
-	FollowUp *struct {
-		Type    string `json:"type"`
-		Payload string `json:"payload"`
-	} `json:"follow_up"`
-}
-
 // see https://developers.facebook.com/docs/messenger-platform/webhooks/#event-notifications
 type Messaging struct {
 	Sender *struct {
@@ -134,11 +125,4 @@ type Messaging struct {
 		MIDs      []string `json:"mids"`
 		Watermark int64    `json:"watermark"`
 	} `json:"delivery"`
-
-	MessagingFeedback *struct {
-		FeedbackScreens []struct {
-			ScreenID  int                         `json:"screen_id"`
-			Questions map[string]FeedbackQuestion `json:"questions"`
-		} `json:"feedback_screens"`
-	} `json:"messaging_feedback"`
 }

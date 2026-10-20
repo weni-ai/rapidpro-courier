@@ -20,11 +20,11 @@ import (
 	"strings"
 
 	"github.com/buger/jsonparser"
-	"github.com/nyaruka/courier"
-	"github.com/nyaruka/courier/core/models"
-	"github.com/nyaruka/courier/handlers"
-	"github.com/nyaruka/courier/utils"
-	"github.com/nyaruka/courier/utils/clogs"
+	"github.com/nyaruka/courier/v26"
+	"github.com/nyaruka/courier/v26/core/models"
+	"github.com/nyaruka/courier/v26/handlers"
+	"github.com/nyaruka/courier/v26/utils"
+	"github.com/nyaruka/courier/v26/utils/clogs"
 	"github.com/nyaruka/gocommon/httpx"
 	"github.com/nyaruka/gocommon/i18n"
 	"github.com/nyaruka/gocommon/jsonx"
@@ -82,7 +82,7 @@ func init() {
 }
 
 // Initialize is called by the engine once everything is loaded
-func (h *handler) Initialize(s courier.Server) error {
+func (h *handler) Initialize(s *courier.Server) error {
 	h.SetServer(s)
 	s.AddHandlerRoute(h, http.MethodPost, "receive", courier.ChannelLogTypeMsgReceive, h.receiveMessage)
 	s.AddHandlerRoute(h, http.MethodPost, "status", courier.ChannelLogTypeMsgStatus, h.receiveStatus)
@@ -95,11 +95,11 @@ type moForm struct {
 	From           string `validate:"required"`
 	FromCountry    string
 	To             string `validate:"required"`
+	ExternalUserId string
 	ToCountry      string
 	Body           string
 	ButtonText     string
 	NumMedia       int
-	ExternalUserId string
 }
 
 type statusForm struct {
@@ -152,12 +152,12 @@ func (h *handler) receiveMessage(ctx context.Context, channel courier.Channel, w
 
 	if form.ExternalUserId != "" && channel.IsScheme(urns.WhatsApp) {
 		userIDURN, urnErr := h.parseURN(channel, form.ExternalUserId, i18n.Country(form.FromCountry))
+
 		if urnErr == nil {
-			if userIDURN != urn {
-				msg.WithNewURN(userIDURN)
-			}
+			msg.WithNewURN(userIDURN, models.NewURNAppend)
 		} else {
-			slog.Warn("ignoring invalid ExternalUserId for message", "ExternalUserId", form.ExternalUserId, "MessageSID", form.MessageSID, "error", urnErr)
+			slog.Warn("ignoring invalid ExternalUserId for message", "ExternalUserId", form.ExternalUserId, "MessageSID", form.MessageSID, "Error", urnErr.Error())
+
 		}
 	}
 
@@ -227,7 +227,7 @@ func (h *handler) receiveStatus(ctx context.Context, channel courier.Channel, w 
 
 func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.SendResult, clog *courier.ChannelLog) error {
 	// build our callback URL
-	callbackDomain := msg.Channel().CallbackDomain(h.Server().Config().Domain)
+	callbackDomain := msg.Channel().CallbackDomain(h.Runtime().Config.Domain)
 	callbackURL := fmt.Sprintf("https://%s/c/%s/%s/status?uuid=%s&action=callback", callbackDomain, strings.ToLower(string(h.ChannelType())), msg.Channel().UUID(), msg.UUID())
 
 	accountSID := msg.Channel().StringConfigForKey(configAccountSID, "")
@@ -250,7 +250,7 @@ func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.Sen
 		}
 
 		form := url.Values{
-			"To":             []string{whatsAppAddress(msg.URN())},
+			"To":             []string{fmt.Sprintf("%s:+%s", urns.WhatsApp.Prefix, msg.URN().Path())},
 			"StatusCallback": []string{callbackURL},
 			"ContentSid":     []string{msg.Templating().ExternalID},
 		}
@@ -368,7 +368,7 @@ func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.Sen
 
 			// for whatsapp channels, we have to prepend whatsapp to the To and From
 			if channel.IsScheme(urns.WhatsApp) {
-				form["To"][0] = whatsAppAddress(msg.URN())
+				form["To"][0] = fmt.Sprintf("%s:+%s", urns.WhatsApp.Prefix, form["To"][0])
 				form["From"][0] = fmt.Sprintf("%s:%s", urns.WhatsApp.Prefix, form["From"][0])
 			}
 
@@ -429,7 +429,7 @@ func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.Sen
 }
 
 // BuildAttachmentRequest to download media for message attachment with Basic auth set
-func (h *handler) BuildAttachmentRequest(ctx context.Context, b courier.Backend, channel courier.Channel, attachmentURL string, clog *courier.ChannelLog) (*http.Request, error) {
+func (h *handler) BuildAttachmentRequest(ctx context.Context, channel courier.Channel, attachmentURL string, clog *courier.ChannelLog) (*http.Request, error) {
 	accountSID := channel.StringConfigForKey(configAccountSID, "")
 	if accountSID == "" {
 		return nil, fmt.Errorf("missing account sid for %s channel", h.ChannelName())
@@ -467,7 +467,8 @@ func (h *handler) parseURN(channel courier.Channel, text string, country i18n.Co
 		}
 
 		if dot := strings.Index(fromTel, "."); dot >= 0 && dot < len(fromTel)-1 {
-			return urns.New(urns.WhatsApp, fromTel)
+			// if we have a BSUID, use that as the URN
+			return urns.New(urns.BSUID, fromTel)
 		}
 
 		// trim off left +, official whatsapp IDs dont have that
@@ -475,15 +476,6 @@ func (h *handler) parseURN(channel courier.Channel, text string, country i18n.Co
 	}
 
 	return urns.ParsePhone(text, country, true, true)
-}
-
-// whatsAppAddress formats the URN as a Twilio WhatsApp address: whatsapp:+<digits> for a phone
-// number or whatsapp:<CC.xxx> for a business-scoped user ID (no leading +)
-func whatsAppAddress(urn urns.URN) string {
-	if courier.IsWhatsAppBSUID(urn) {
-		return fmt.Sprintf("%s:%s", urns.WhatsApp.Prefix, urn.Path())
-	}
-	return fmt.Sprintf("%s:+%s", urns.WhatsApp.Prefix, urn.Path())
 }
 
 func (h *handler) baseURL(c courier.Channel) string {

@@ -7,8 +7,8 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/nyaruka/courier/core/models"
-	"github.com/nyaruka/courier/utils/clogs"
+	"github.com/nyaruka/courier/v26/core/models"
+	"github.com/nyaruka/courier/v26/utils/clogs"
 	"github.com/nyaruka/gocommon/urns"
 )
 
@@ -25,13 +25,12 @@ func (r *SendResult) ExternalIDs() []string {
 	return r.externalIDs
 }
 
-func (r *SendResult) SetNewURN(u urns.URN) {
-	r.newURN = u
+func (r *SendResult) SetNewURN(urn urns.URN) {
+	r.newURN = urn
 }
 
-func (r *SendResult) GetNewURN() urns.URN {
+func (r *SendResult) NewURN() urns.URN {
 	return r.newURN
-
 }
 
 type SendError struct {
@@ -140,16 +139,28 @@ func ErrFailedWithReason(code, desc string) *SendError {
 	}
 }
 
+// ErrRetryableWithReason is like ErrFailedWithReason but for failures that may be transient and so should be retried
+func ErrRetryableWithReason(code, desc string) *SendError {
+	return &SendError{
+		msg:         "channel rejected send with retryable reason",
+		retryable:   true,
+		loggable:    false,
+		clogCode:    "rejected_with_reason",
+		clogMsg:     desc,
+		clogExtCode: code,
+	}
+}
+
 // Foreman takes care of managing our set of sending workers and assigns msgs for each to send
 type Foreman struct {
-	server           Server
+	server           *Server
 	senders          []*Sender
 	availableSenders chan *Sender
 	quit             chan bool
 }
 
 // NewForeman creates a new Foreman for the passed in server with the number of max senders
-func NewForeman(server Server, maxSenders int) *Foreman {
+func NewForeman(server *Server, maxSenders int) *Foreman {
 	foreman := &Foreman{
 		server:           server,
 		senders:          make([]*Sender, maxSenders),
@@ -313,7 +324,7 @@ func (w *Sender) sendMessage(msg MsgOut) {
 	}
 
 	var status StatusUpdate
-	var newURN urns.URN
+	var res *SendResult
 	var redactValues []string
 	handler := server.GetHandler(msg.Channel())
 	if handler != nil {
@@ -333,7 +344,7 @@ func (w *Sender) sendMessage(msg MsgOut) {
 		log.Warn("duplicate send, marking as wired")
 
 	} else {
-		status, newURN = w.sendByHandler(sendCTX, handler, msg, clog, log)
+		status, res = w.sendByHandler(sendCTX, handler, msg, clog, log)
 	}
 
 	// we allot 15 seconds to write our status to the db
@@ -352,27 +363,19 @@ func (w *Sender) sendMessage(msg MsgOut) {
 	}
 
 	// mark our send task as complete
-	backend.OnSendComplete(writeCTX, msg, status, clog, newURN)
+	backend.OnSendComplete(writeCTX, msg, status, res, clog)
 }
 
-func (w *Sender) sendByHandler(ctx context.Context, h ChannelHandler, m MsgOut, clog *ChannelLog, log *slog.Logger) (StatusUpdate, urns.URN) {
+func (w *Sender) sendByHandler(ctx context.Context, h ChannelHandler, m MsgOut, clog *ChannelLog, log *slog.Logger) (StatusUpdate, *SendResult) {
 	backend := w.foreman.server.Backend()
-	res := &SendResult{newURN: urns.NilURN}
+	res := &SendResult{}
 	err := h.Send(ctx, m, res, clog)
 
 	status := backend.NewStatusUpdate(m.Channel(), m.UUID(), models.MsgStatusWired, clog)
 
 	// fow now we can only store one external id per message
 	if len(res.ExternalIDs()) > 0 {
-		status.SetExternalID(res.ExternalIDs()[0])
-	}
-
-	// phone-number swaps (e.g. 9th digit) still use URN update; a WhatsApp BSUID is appended via contact_changed
-	if res.newURN != urns.NilURN && !IsWhatsAppBSUID(res.newURN) {
-		urnErr := status.SetURNUpdate(m.URN(), res.newURN)
-		if urnErr != nil {
-			clog.RawError(urnErr)
-		}
+		status.SetExternalIdentifier(res.ExternalIDs()[0])
 	}
 
 	var serr *SendError
@@ -404,5 +407,5 @@ func (w *Sender) sendByHandler(ctx context.Context, h ChannelHandler, m MsgOut, 
 		clog.Error(&clogs.Error{Code: "internal_error", Message: "An internal error occured."})
 	}
 
-	return status, res.GetNewURN()
+	return status, res
 }

@@ -8,11 +8,11 @@ import (
 
 	"fmt"
 
-	"github.com/nyaruka/courier"
-	"github.com/nyaruka/courier/core/models"
-	. "github.com/nyaruka/courier/handlers"
-	"github.com/nyaruka/courier/test"
-	"github.com/nyaruka/courier/utils/clogs"
+	"github.com/nyaruka/courier/v26"
+	"github.com/nyaruka/courier/v26/core/models"
+	. "github.com/nyaruka/courier/v26/handlers"
+	"github.com/nyaruka/courier/v26/test"
+	"github.com/nyaruka/courier/v26/utils/clogs"
 	"github.com/nyaruka/gocommon/httpx"
 	"github.com/nyaruka/gocommon/urns"
 	"github.com/stretchr/testify/assert"
@@ -78,8 +78,6 @@ var (
 
 	waReceiveValid         = "ToCountry=US&ToState=District+Of+Columbia&SmsMessageSid=SMe287d7109a5a925f182f0e07fe5b223b&NumMedia=0&ToCity=&FromZip=01022&SmsSid=SMe287d7109a5a925f182f0e07fe5b223b&FromState=MA&SmsStatus=received&FromCity=CHICOPEE&Body=Msg&FromCountry=US&To=whatsapp:%2B12028831111&ToZip=&NumSegments=1&MessageSid=SMe287d7109a5a925f182f0e07fe5b223b&AccountSid=acctid&From=whatsapp:%2B14133881111&ApiVersion=2010-04-01"
 	waReceiveBSUIDValid    = "ToCountry=US&ToState=District+Of+Columbia&SmsMessageSid=SMe287d7109a5a925f182f0e07fe5b223b&NumMedia=0&ToCity=&FromZip=01022&SmsSid=SMe287d7109a5a925f182f0e07fe5b223b&FromState=MA&SmsStatus=received&FromCity=CHICOPEE&Body=Msg&FromCountry=US&To=whatsapp:%2B12028831111&ToZip=&NumSegments=1&MessageSid=SMe287d7109a5a925f182f0e07fe5b223b&AccountSid=acctid&From=whatsapp:%2B14133881111&ExternalUserId=whatsapp:US.1234&ApiVersion=2010-04-01"
-	waReceiveFromBSUID     = "ToCountry=US&ToState=District+Of+Columbia&SmsMessageSid=SMe287d7109a5a925f182f0e07fe5b223b&NumMedia=0&ToCity=&FromZip=01022&SmsSid=SMe287d7109a5a925f182f0e07fe5b223b&FromState=MA&SmsStatus=received&FromCity=CHICOPEE&Body=Msg&FromCountry=US&To=whatsapp:%2B12028831111&ToZip=&NumSegments=1&MessageSid=SMe287d7109a5a925f182f0e07fe5b223b&AccountSid=acctid&From=whatsapp:US.1234&ExternalUserId=whatsapp:US.1234&ApiVersion=2010-04-01"
-	waReceiveBSUIDInvalid  = "ToCountry=US&ToState=District+Of+Columbia&SmsMessageSid=SMe287d7109a5a925f182f0e07fe5b223b&NumMedia=0&ToCity=&FromZip=01022&SmsSid=SMe287d7109a5a925f182f0e07fe5b223b&FromState=MA&SmsStatus=received&FromCity=CHICOPEE&Body=Msg&FromCountry=US&To=whatsapp:%2B12028831111&ToZip=&NumSegments=1&MessageSid=SMe287d7109a5a925f182f0e07fe5b223b&AccountSid=acctid&From=whatsapp:%2B14133881111&ExternalUserId=whatsapp:foo_bar&ApiVersion=2010-04-01"
 	waReceiveButtonValid   = "ToCountry=US&ToState=District+Of+Columbia&SmsMessageSid=SMe287d7109a5a925f182f0e07fe5b223b&NumMedia=0&ToCity=&FromZip=01022&SmsSid=SMe287d7109a5a925f182f0e07fe5b223b&FromState=MA&SmsStatus=received&FromCity=CHICOPEE&Body=Msg&ButtonText=Confirm&FromCountry=US&To=whatsapp:%2B12028831111&ToZip=&NumSegments=1&MessageSid=SMe287d7109a5a925f182f0e07fe5b223b&AccountSid=acctid&From=whatsapp:%2B14133881111&ApiVersion=2010-04-01"
 	waReceivePrefixlessURN = "ToCountry=US&ToState=CA&SmsMessageSid=SM681a1f26d9ec591431ce406e8f399525&NumMedia=0&ToCity=&FromZip=60625&SmsSid=SM681a1f26d9ec591431ce406e8f399525&FromState=IL&SmsStatus=received&FromCity=CHICAGO&Body=Msg&FromCountry=US&To=%2B12028831111&ToZip=&NumSegments=1&MessageSid=SM681a1f26d9ec591431ce406e8f399525&AccountSid=acctid&From=%2B14133881111&ApiVersion=2010-04-01"
 )
@@ -456,13 +454,7 @@ var twaTestCases = []IncomingTestCase{
 		ExpectedMsgText: Sp("Msg"), ExpectedURN: "whatsapp:14133881111", ExpectedExternalID: "SMe287d7109a5a925f182f0e07fe5b223b",
 		PrepRequest: addValidSignature},
 	{Label: "Receive BSUID Valid", URL: twaReceiveURL, Data: waReceiveBSUIDValid, ExpectedRespStatus: 200, ExpectedBodyContains: "<Response/>",
-		ExpectedMsgText: Sp("Msg"), ExpectedURN: "whatsapp:14133881111", ExpectedNewURN: "whatsapp:US.1234", ExpectedExternalID: "SMe287d7109a5a925f182f0e07fe5b223b",
-		PrepRequest: addValidSignature},
-	{Label: "Receive From BSUID with no phone", URL: twaReceiveURL, Data: waReceiveFromBSUID, ExpectedRespStatus: 200, ExpectedBodyContains: "<Response/>",
-		ExpectedMsgText: Sp("Msg"), ExpectedURN: "whatsapp:US.1234", ExpectedExternalID: "SMe287d7109a5a925f182f0e07fe5b223b",
-		PrepRequest: addValidSignature},
-	{Label: "Receive with invalid ExternalUserId, no new URN added", URL: twaReceiveURL, Data: waReceiveBSUIDInvalid, ExpectedRespStatus: 200, ExpectedBodyContains: "<Response/>",
-		ExpectedMsgText: Sp("Msg"), ExpectedURN: "whatsapp:14133881111", ExpectedExternalID: "SMe287d7109a5a925f182f0e07fe5b223b",
+		ExpectedMsgText: Sp("Msg"), ExpectedURN: "whatsapp:14133881111", ExpectedNewURN: &models.NewURNSpec{Value: "bsuid:US.1234", Action: models.NewURNAppend}, ExpectedExternalID: "SMe287d7109a5a925f182f0e07fe5b223b",
 		PrepRequest: addValidSignature},
 	{Label: "Receive Valid", URL: twaReceiveURL, Data: waReceiveButtonValid, ExpectedRespStatus: 200, ExpectedBodyContains: "<Response/>",
 		ExpectedMsgText: Sp("Confirm"), ExpectedURN: "whatsapp:14133881111", ExpectedExternalID: "SMe287d7109a5a925f182f0e07fe5b223b",
@@ -1146,21 +1138,6 @@ var twaSendTestCases = []OutgoingTestCase{
 		ExpectedExtIDs: []string{"1002"},
 	},
 	{
-		Label:   "Plain Send with BSUID as whatsapp URN",
-		MsgText: "Simple Message ☺",
-		MsgURN:  "whatsapp:US.1234",
-		MockResponses: map[string][]*httpx.MockResponse{
-			"https://api.twilio.com/2010-04-01/Accounts/accountSID/Messages.json": {
-				httpx.NewMockResponse(200, nil, []byte(`{ "sid": "1002" }`)),
-			},
-		},
-		ExpectedRequests: []ExpectedRequest{{
-			Form:    url.Values{"Body": {"Simple Message ☺"}, "To": {"whatsapp:US.1234"}, "From": {"whatsapp:+12065551212"}, "MessagingServiceSid": {"messageServiceSID"}, "StatusCallback": {"https://localhost/c/twa/8eb23e93-5ecb-45ba-b726-3b064e0c56ab/status?uuid=0191e180-7d60-7000-aded-7d8b151cbd5b&action=callback"}},
-			Headers: map[string]string{"Authorization": "Basic YWNjb3VudFNJRDphdXRoVG9rZW4="},
-		}},
-		ExpectedExtIDs: []string{"1002"},
-	},
-	{
 		Label:     "Template Send",
 		MsgText:   "templated message",
 		MsgURN:    "whatsapp:250788383383",
@@ -1445,8 +1422,6 @@ func TestOutgoing(t *testing.T) {
 }
 
 func TestBuildAttachmentRequest(t *testing.T) {
-	mb := test.NewMockBackend()
-
 	var defaultChannel = test.NewMockChannel("8eb23e93-5ecb-45ba-b726-3b064e0c56ab", "T", "2020", "US",
 		[]string{urns.Phone.Prefix},
 		map[string]any{
@@ -1454,7 +1429,7 @@ func TestBuildAttachmentRequest(t *testing.T) {
 			models.ConfigAuthToken: "authToken"})
 
 	twHandler := &handler{NewBaseHandler(models.ChannelType("T"), "Twilio"), true}
-	req, _ := twHandler.BuildAttachmentRequest(context.Background(), mb, defaultChannel, "https://example.org/v1/media/41", nil)
+	req, _ := twHandler.BuildAttachmentRequest(context.Background(), defaultChannel, "https://example.org/v1/media/41", nil)
 	assert.Equal(t, "https://example.org/v1/media/41", req.URL.String())
 	assert.Equal(t, "Basic YWNjb3VudFNJRDphdXRoVG9rZW4=", req.Header.Get("Authorization"))
 
@@ -1466,7 +1441,7 @@ func TestBuildAttachmentRequest(t *testing.T) {
 			configSendURL:          "BASE_URL",
 		})
 	swHandler := &handler{NewBaseHandler(models.ChannelType("SW"), "SignalWire"), false}
-	req, _ = swHandler.BuildAttachmentRequest(context.Background(), mb, swChannel, "https://example.org/v1/media/41", nil)
+	req, _ = swHandler.BuildAttachmentRequest(context.Background(), swChannel, "https://example.org/v1/media/41", nil)
 	assert.Equal(t, "https://example.org/v1/media/41", req.URL.String())
 	assert.Equal(t, "", req.Header.Get("Authorization"))
 }

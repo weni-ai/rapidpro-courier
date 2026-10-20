@@ -7,15 +7,15 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/buger/jsonparser"
-	"github.com/nyaruka/courier"
-	"github.com/nyaruka/courier/core/models"
-	"github.com/nyaruka/courier/handlers"
-	"github.com/nyaruka/courier/handlers/meta/whatsapp"
+	"github.com/nyaruka/courier/v26"
+	"github.com/nyaruka/courier/v26/core/models"
+	"github.com/nyaruka/courier/v26/handlers"
+	"github.com/nyaruka/courier/v26/handlers/meta/whatsapp"
 	"github.com/nyaruka/gocommon/jsonx"
 	"github.com/nyaruka/gocommon/urns"
 )
@@ -42,7 +42,7 @@ func newWAHandler(channelType models.ChannelType, name string) courier.ChannelHa
 }
 
 // Initialize is called by the engine once everything is loaded
-func (h *handler) Initialize(s courier.Server) error {
+func (h *handler) Initialize(s *courier.Server) error {
 	h.SetServer(s)
 	s.AddHandlerRoute(h, http.MethodPost, "receive", courier.ChannelLogTypeMultiReceive, handlers.JSONPayload(h, h.receiveEvent))
 	return nil
@@ -117,84 +117,52 @@ func (h *handler) processWhatsAppPayload(ctx context.Context, channel courier.Ch
 		for _, change := range entry.Changes {
 
 			for _, contact := range change.Value.Contacts {
-				if contact.WaID != "" {
-					contactNames[contact.WaID] = contact.Profile.Name
-				}
-				if contact.UserID != "" {
-					contactNames[contact.UserID] = contact.Profile.Name
-				}
+				contactNames[contact.WaID] = contact.Profile.Name
 			}
 
-			for _, msg := range change.Value.Messages {
-				if seenMsgIDs[msg.ID] {
+			for _, waMsg := range change.Value.Messages {
+				if seenMsgIDs[waMsg.ID] {
 					continue
 				}
 
-				// create our date from the timestamp
-				ts, err := strconv.ParseInt(msg.Timestamp, 10, 64)
-				if err != nil {
-					return nil, nil, handlers.WriteAndLogRequestIgnored(ctx, h, channel, w, r, fmt.Sprintf("invalid timestamp: %s", msg.Timestamp))
-				}
-				date := time.Unix(ts, 0).UTC()
-
-				sender := whatsapp.Identifier(msg.From, msg.FromUserID)
-				urn, err := urns.New(urns.WhatsApp, sender)
-				if err != nil {
-					return nil, nil, handlers.WriteAndLogRequestIgnored(ctx, h, channel, w, r, "invalid whatsapp id")
-				}
-
-				for _, msgError := range msg.Errors {
-					clog.Error(courier.ErrorExternal(strconv.Itoa(msgError.Code), msgError.Title))
-				}
-
-				text := ""
-				mediaURL := ""
-
-				if msg.Type == "text" {
-					text = msg.Text.Body
-				} else if msg.Type == "audio" && msg.Audio != nil {
-					text = msg.Audio.Caption
-					mediaURL, err = h.resolveMediaURL(channel, msg.Audio.ID, clog)
-				} else if msg.Type == "voice" && msg.Voice != nil {
-					text = msg.Voice.Caption
-					mediaURL, err = h.resolveMediaURL(channel, msg.Voice.ID, clog)
-				} else if msg.Type == "button" && msg.Button != nil {
-					text = msg.Button.Text
-				} else if msg.Type == "document" && msg.Document != nil {
-					text = msg.Document.Caption
-					mediaURL, err = h.resolveMediaURL(channel, msg.Document.ID, clog)
-				} else if msg.Type == "image" && msg.Image != nil {
-					text = msg.Image.Caption
-					mediaURL, err = h.resolveMediaURL(channel, msg.Image.ID, clog)
-				} else if msg.Type == "video" && msg.Video != nil {
-					text = msg.Video.Caption
-					mediaURL, err = h.resolveMediaURL(channel, msg.Video.ID, clog)
-				} else if msg.Type == "location" && msg.Location != nil {
-					mediaURL = fmt.Sprintf("geo:%f,%f", msg.Location.Latitude, msg.Location.Longitude)
-				} else if msg.Type == "interactive" && msg.Interactive.Type == "button_reply" {
-					text = msg.Interactive.ButtonReply.Title
-				} else if msg.Type == "interactive" && msg.Interactive.Type == "list_reply" {
-					text = msg.Interactive.ListReply.Title
-				} else {
-					// we received a message type we do not support.
-					courier.LogRequestError(r, channel, fmt.Errorf("unsupported message type %s", msg.Type))
+				if waMsg.GroupID != "" {
+					data = append(data, courier.NewInfoData("ignoring group message"))
 					continue
+				}
+
+				date, urn, text, mediaURL, mediaID, err, finalErr := waMsg.ExtractData(clog)
+				if finalErr != nil {
+					return nil, nil, handlers.WriteAndLogRequestIgnored(ctx, h, channel, w, r, finalErr.Error())
+				}
+
+				if err != nil {
+					courier.LogRequestError(r, channel, err)
+					continue
+				}
+
+				if mediaID != "" && mediaURL == "" {
+					mediaURL, err = h.resolveMediaURL(channel, mediaID, clog)
+					// we had an error downloading media
+					if err != nil {
+						courier.LogRequestError(r, channel, err)
+					}
 				}
 
 				// create our message
-				event := h.Backend().NewIncomingMsg(ctx, channel, urn, text, msg.ID, clog).WithReceivedOn(date).WithContactName(contactNames[sender])
-
-				// we had an error downloading media
-				if err != nil {
-					courier.LogRequestError(r, channel, err)
-				}
+				event := h.Backend().NewIncomingMsg(ctx, channel, urn, text, waMsg.ID, clog).WithReceivedOn(date).WithContactName(contactNames[waMsg.From])
 
 				if mediaURL != "" {
 					event.WithAttachment(mediaURL)
 				}
 
-				if urnErr := whatsapp.AttachUserID(event, urn, msg.FromUserID); urnErr != nil {
-					courier.LogRequestError(r, channel, urnErr)
+				// if we have a user_id, add it as secondary BSUID URN
+				if waMsg.FromUserID != "" {
+					userIDURN, urnErr := urns.New(urns.BSUID, waMsg.FromUserID)
+					if urnErr == nil {
+						event.WithNewURN(userIDURN, models.NewURNAppend)
+					} else {
+						courier.LogRequestError(r, channel, fmt.Errorf("invalid user_id for BSUID URN: %w", urnErr))
+					}
 				}
 
 				err = h.Backend().WriteMsg(ctx, event, clog)
@@ -204,7 +172,7 @@ func (h *handler) processWhatsAppPayload(ctx context.Context, channel courier.Ch
 
 				events = append(events, event)
 				data = append(data, courier.NewMsgReceiveData(event))
-				seenMsgIDs[msg.ID] = true
+				seenMsgIDs[waMsg.ID] = true
 			}
 
 			for _, status := range change.Value.Statuses {
@@ -245,7 +213,7 @@ func (h *handler) processWhatsAppPayload(ctx context.Context, channel courier.Ch
 }
 
 // BuildAttachmentRequest to download media for message attachment with Bearer token set
-func (h *handler) BuildAttachmentRequest(ctx context.Context, b courier.Backend, channel courier.Channel, attachmentURL string, clog *courier.ChannelLog) (*http.Request, error) {
+func (h *handler) BuildAttachmentRequest(ctx context.Context, channel courier.Channel, attachmentURL string, clog *courier.ChannelLog) (*http.Request, error) {
 	token := channel.StringConfigForKey(models.ConfigAuthToken, "")
 	if token == "" {
 		return nil, fmt.Errorf("missing token for D3C channel")
@@ -311,22 +279,37 @@ func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.Sen
 		return err
 	}
 
+	var userID string
 	for _, payload := range requestPayloads {
-		err := h.requestD3C(payload, accessToken, res, sendURL, clog)
+		respUserID, err := h.requestD3C(payload, accessToken, res, sendURL, clog)
 		if err != nil {
 			return err
+		}
+		if respUserID != "" {
+			userID = respUserID
+		}
+	}
+
+	// if we got a user_id in the response, set it as a new URN on the send result so the backend
+	// can queue a contact_changed task to append it to the contact
+	if userID != "" {
+		userIDURN, err := urns.New(urns.BSUID, userID)
+		if err != nil {
+			clog.RawError(fmt.Errorf("unable to make BSUID URN from user_id %s: %w", userID, err))
+		} else {
+			res.SetNewURN(userIDURN)
 		}
 	}
 
 	return nil
 }
 
-func (h *handler) requestD3C(payload whatsapp.SendRequest, accessToken string, res *courier.SendResult, wacPhoneURL *url.URL, clog *courier.ChannelLog) error {
+func (h *handler) requestD3C(payload whatsapp.SendRequest, accessToken string, res *courier.SendResult, wacPhoneURL *url.URL, clog *courier.ChannelLog) (string, error) {
 	jsonBody := jsonx.MustMarshal(payload)
 
 	req, err := http.NewRequest(http.MethodPost, wacPhoneURL.String(), bytes.NewReader(jsonBody))
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	req.Header.Set(d3AuthorizationKey, accessToken)
@@ -335,27 +318,29 @@ func (h *handler) requestD3C(payload whatsapp.SendRequest, accessToken string, r
 
 	resp, respBody, err := h.RequestHTTP(req, clog)
 	if err != nil || resp.StatusCode/100 == 5 {
-		return courier.ErrConnectionFailed
+		return "", courier.ErrConnectionFailed
 	}
 	respPayload := &whatsapp.SendResponse{}
 	err = json.Unmarshal(respBody, respPayload)
 	if err != nil {
-		return courier.ErrResponseUnparseable
+		return "", courier.ErrResponseUnparseable
 	}
 
-	if respPayload.Error.Code != 0 {
-		return courier.ErrFailedWithReason(strconv.Itoa(respPayload.Error.Code), respPayload.Error.Message)
+	if slices.Contains(whatsapp.WACThrottlingErrorCodes, respPayload.Error.Code) {
+		return "", courier.ErrConnectionThrottled
 	}
 
-	externalID := respPayload.Messages[0].ID
-	if externalID != "" {
-		res.AddExternalID(externalID)
+	if slices.Contains(whatsapp.WACRetryableErrorCodes, respPayload.Error.Code) {
+		return "", courier.ErrRetryableWithReason(strconv.Itoa(respPayload.Error.Code), respPayload.Error.Message)
 	}
 
-	if userID := respPayload.UserID(); userID != "" {
-		if userIDURN, urnErr := urns.New(urns.WhatsApp, userID); urnErr == nil {
-			res.SetNewURN(userIDURN)
-		}
+	if respPayload.Error.Code != 0 || respPayload.Error.Message != "" {
+		return "", courier.ErrFailedWithReason(strconv.Itoa(respPayload.Error.Code), respPayload.Error.Message)
 	}
-	return nil
+
+	if len(respPayload.Messages) > 0 && respPayload.Messages[0].ID != "" {
+		res.AddExternalID(respPayload.Messages[0].ID)
+	}
+
+	return respPayload.UserID(), nil
 }
