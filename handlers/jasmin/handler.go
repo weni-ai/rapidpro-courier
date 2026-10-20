@@ -2,6 +2,7 @@ package jasmin
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -9,11 +10,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nyaruka/courier"
-	"github.com/nyaruka/courier/core/models"
-	"github.com/nyaruka/courier/handlers"
+	"github.com/nyaruka/courier/v26"
+	"github.com/nyaruka/courier/v26/core/models"
+	"github.com/nyaruka/courier/v26/handlers"
 	"github.com/nyaruka/gocommon/gsm7"
 	"github.com/nyaruka/gocommon/urns"
+	"golang.org/x/text/encoding/unicode"
 )
 
 var idRegex = regexp.MustCompile(`Success \"(.*)\"`)
@@ -31,7 +33,7 @@ func newHandler() courier.ChannelHandler {
 }
 
 // Initialize is called by the engine once everything is loaded
-func (h *handler) Initialize(s courier.Server) error {
+func (h *handler) Initialize(s *courier.Server) error {
 	h.SetServer(s)
 	s.AddHandlerRoute(h, http.MethodPost, "receive", courier.ChannelLogTypeMsgReceive, h.receiveMessage)
 	s.AddHandlerRoute(h, http.MethodPost, "status", courier.ChannelLogTypeMsgStatus, h.receiveStatus)
@@ -39,9 +41,20 @@ func (h *handler) Initialize(s courier.Server) error {
 }
 
 type statusForm struct {
-	ID        string `name:"id"     validate:"required"`
-	Delivered int    `name:"dlvrd"`
-	Err       int    `name:"err"`
+	ID            string `name:"id"     validate:"required"`
+	MessageStatus string `name:"message_status"`
+	Delivered     int    `name:"dlvrd"`
+	Err           int    `name:"err"`
+}
+
+var statusMapping = map[string]models.MsgStatus{
+	"ACCEPTD": models.MsgStatusSent,
+	"UNKNOWN": models.MsgStatusWired,
+	"UNDELIV": models.MsgStatusFailed,
+	"REJECTD": models.MsgStatusFailed,
+	"EXPIRED": models.MsgStatusFailed,
+	"DELETED": models.MsgStatusFailed,
+	"DELIVRD": models.MsgStatusDelivered,
 }
 
 // receiveStatus is our HTTP handler function for status updates
@@ -52,14 +65,17 @@ func (h *handler) receiveStatus(ctx context.Context, c courier.Channel, w http.R
 		return nil, handlers.WriteAndLogRequestError(ctx, h, c, w, r, err)
 	}
 
-	// should have either delivered or err
+	// prefer message_status when present; otherwise require either dlvrd or err to be set
 	var reqStatus models.MsgStatus
-	if form.Delivered == 1 {
+	msgStatus, found := statusMapping[form.MessageStatus]
+	if found {
+		reqStatus = msgStatus
+	} else if form.Delivered == 1 {
 		reqStatus = models.MsgStatusDelivered
 	} else if form.Err == 1 {
 		reqStatus = models.MsgStatusFailed
 	} else {
-		return nil, handlers.WriteAndLogRequestError(ctx, h, c, w, r, fmt.Errorf("must have either dlvrd or err set to 1"))
+		return nil, handlers.WriteAndLogRequestError(ctx, h, c, w, r, fmt.Errorf("must have a known message_status or either dlvrd or err set to 1"))
 	}
 
 	status := h.Backend().NewStatusUpdateByExternalID(c, form.ID, reqStatus, clog)
@@ -128,7 +144,7 @@ func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.Sen
 		return courier.ErrChannelConfig
 	}
 
-	callbackDomain := msg.Channel().CallbackDomain(h.Server().Config().Domain)
+	callbackDomain := msg.Channel().CallbackDomain(h.Runtime().Config.Domain)
 	dlrURL := fmt.Sprintf("https://%s/c/js/%s/status", callbackDomain, msg.Channel().UUID())
 
 	// build our request
@@ -142,7 +158,22 @@ func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.Sen
 		"dlr-level":  []string{"2"},
 		"dlr-method": []string{http.MethodPost},
 		"coding":     []string{"0"},
-		"content":    []string{string(gsm7.Encode(gsm7.ReplaceSubstitutions(handlers.GetTextAndAttachments(msg))))},
+	}
+
+	// if we are smart, first try to convert to GSM7 chars
+	replaced := gsm7.ReplaceSubstitutions(handlers.GetTextAndAttachments(msg))
+	if gsm7.IsValid(replaced) {
+		form["content"] = []string{replaced}
+	} else {
+		form["coding"] = []string{"8"}
+
+		encoder := unicode.UTF16(unicode.BigEndian, unicode.IgnoreBOM).NewEncoder()
+		utf16beBytes, err := encoder.Bytes([]byte(handlers.GetTextAndAttachments(msg)))
+		if err != nil {
+			return err
+		}
+
+		form["hex-content"] = []string{string(hex.EncodeToString(utf16beBytes))}
 	}
 
 	fullURL, _ := url.Parse(sendURL)

@@ -16,9 +16,9 @@ import (
 
 	"errors"
 
-	"github.com/nyaruka/courier"
-	"github.com/nyaruka/courier/core/models"
-	"github.com/nyaruka/courier/handlers"
+	"github.com/nyaruka/courier/v26"
+	"github.com/nyaruka/courier/v26/core/models"
+	"github.com/nyaruka/courier/v26/handlers"
 	"github.com/nyaruka/gocommon/urns"
 )
 
@@ -53,7 +53,7 @@ func newHandler() courier.ChannelHandler {
 }
 
 // Initialize is called by the engine once everything is loaded
-func (h *handler) Initialize(s courier.Server) error {
+func (h *handler) Initialize(s *courier.Server) error {
 	h.SetServer(s)
 	s.AddHandlerRoute(h, http.MethodPost, "receive", courier.ChannelLogTypeMsgReceive, handlers.JSONPayload(h, h.receiveMessage))
 	return nil
@@ -178,7 +178,7 @@ func buildMediaURL(mediaID string) string {
 }
 
 // BuildAttachmentRequest to download media for message attachment with Bearer token set
-func (h *handler) BuildAttachmentRequest(ctx context.Context, b courier.Backend, channel courier.Channel, attachmentURL string, clog *courier.ChannelLog) (*http.Request, error) {
+func (h *handler) BuildAttachmentRequest(ctx context.Context, channel courier.Channel, attachmentURL string, clog *courier.ChannelLog) (*http.Request, error) {
 	token := channel.StringConfigForKey(models.ConfigAuthToken, "")
 	if token == "" {
 		return nil, fmt.Errorf("missing token for LN channel")
@@ -252,7 +252,7 @@ type QuickReplyItem struct {
 	Action struct {
 		Type  string `json:"type"`
 		Label string `json:"label"`
-		Text  string `json:"text"`
+		Text  string `json:"text,omitempty"`
 	} `json:"action"`
 }
 
@@ -332,12 +332,21 @@ func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.Sen
 			}
 		} else {
 			mtTextMsg := mtTextMsg{Type: "text", Text: part}
-			items := make([]QuickReplyItem, len(qrs))
-			for j, qr := range qrs {
-				items[j] = QuickReplyItem{Type: "action"}
-				items[j].Action.Type = "message"
-				items[j].Action.Label = qr.Text
-				items[j].Action.Text = qr.Text
+			items := make([]QuickReplyItem, 0, len(qrs))
+			for _, qr := range qrs {
+				item := QuickReplyItem{Type: "action"}
+				switch qr.Type {
+				case "location":
+					item.Action.Type = "location"
+					item.Action.Label = qr.GetText()
+					items = append(items, item)
+				case "text":
+					item.Action.Type = "message"
+					item.Action.Label = qr.GetText()
+					item.Action.Text = qr.GetText()
+					items = append(items, item)
+				}
+
 			}
 			if len(items) > 0 {
 				mtTextMsg.QuickReply = &mtQuickReply{Items: items}

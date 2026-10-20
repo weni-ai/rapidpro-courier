@@ -1,14 +1,17 @@
 package models
 
 import (
+	"context"
 	"time"
+	"unicode/utf8"
 
 	"github.com/lib/pq"
-	"github.com/nyaruka/courier/utils/clogs"
+	"github.com/nyaruka/courier/v26/utils/clogs"
 	"github.com/nyaruka/gocommon/i18n"
 	"github.com/nyaruka/gocommon/urns"
 	"github.com/nyaruka/gocommon/uuids"
 	"github.com/nyaruka/null/v3"
+	"github.com/vinovest/sqlx"
 )
 
 // MsgUUID is the UUID of a message which has been received
@@ -28,6 +31,19 @@ const (
 	MsgStatusErrored   MsgStatus = "E"
 	MsgStatusFailed    MsgStatus = "F"
 )
+
+// NewURNAction is the action to perform with a new URN
+type NewURNAction string
+
+const (
+	NewURNAppend NewURNAction = "append"
+)
+
+// NewURNSpec specifies a new URN to add or replace on the contact
+type NewURNSpec struct {
+	Value  urns.URN     `json:"value"`
+	Action NewURNAction `json:"action"`
+}
 
 // MsgDirection is the direction of a message
 type MsgDirection string
@@ -50,18 +66,18 @@ const (
 
 // MsgIn is an incoming message which can be written to the database or marshaled to a spool file
 type MsgIn struct {
-	OrgID_        OrgID          `db:"org_id"         json:"org_id"`
-	UUID_         MsgUUID        `db:"uuid"           json:"uuid"`
-	Text_         string         `db:"text"           json:"text"`
-	Attachments_  pq.StringArray `db:"attachments"    json:"attachments"`
-	ExternalID_   null.String    `db:"external_id"    json:"external_id"`
-	ChannelID_    ChannelID      `db:"channel_id"     json:"channel_id"`
-	ContactID_    ContactID      `db:"contact_id"     json:"contact_id"`
-	ContactURNID_ ContactURNID   `db:"contact_urn_id" json:"contact_urn_id"`
-	CreatedOn_    time.Time      `db:"created_on"     json:"created_on"`
-	ModifiedOn_   time.Time      `db:"modified_on"    json:"modified_on"`
-	SentOn_       *time.Time     `db:"sent_on"        json:"sent_on"`
-	LogUUIDs      pq.StringArray `db:"log_uuids"      json:"log_uuids"`
+	OrgID_              OrgID          `db:"org_id"                 json:"org_id"`
+	UUID_               MsgUUID        `db:"uuid"                   json:"uuid"`
+	Text_               string         `db:"text"                   json:"text"`
+	Attachments_        pq.StringArray `db:"attachments"            json:"attachments"`
+	ExternalIdentifier_ null.String    `db:"external_identifier"    json:"external_identifier"`
+	ChannelID_          ChannelID      `db:"channel_id"             json:"channel_id"`
+	ContactID_          ContactID      `db:"contact_id"             json:"contact_id"`
+	ContactURNID_       ContactURNID   `db:"contact_urn_id"         json:"contact_urn_id"`
+	CreatedOn_          time.Time      `db:"created_on"             json:"created_on"`
+	ModifiedOn_         time.Time      `db:"modified_on"            json:"modified_on"`
+	SentOn_             *time.Time     `db:"sent_on"                json:"sent_on"`
+	LogUUIDs            pq.StringArray `db:"log_uuids"              json:"log_uuids"`
 }
 
 // NewIncomingMsg creates a new incoming message
@@ -69,24 +85,37 @@ func NewIncomingMsg(channel *Channel, urn urns.URN, text string, extID string, c
 	now := time.Now()
 
 	return &MsgIn{
-		OrgID_:      channel.OrgID(),
-		UUID_:       MsgUUID(uuids.NewV7()),
-		Text_:       text,
-		ExternalID_: null.String(extID),
-		ChannelID_:  channel.ID(),
-		CreatedOn_:  now,
-		ModifiedOn_: now,
-		SentOn_:     &now,
-		LogUUIDs:    pq.StringArray{string(clogUUID)},
+		OrgID_:              channel.OrgID(),
+		UUID_:               MsgUUID(uuids.NewV7()),
+		Text_:               text,
+		ExternalIdentifier_: null.String(extID),
+		ChannelID_:          channel.ID(),
+		CreatedOn_:          now,
+		ModifiedOn_:         now,
+		SentOn_:             &now,
+		LogUUIDs:            pq.StringArray{string(clogUUID)},
 	}
 }
 
 func (m *MsgIn) EventUUID() uuids.UUID  { return uuids.UUID(m.UUID_) }
 func (m *MsgIn) UUID() MsgUUID          { return m.UUID_ }
-func (m *MsgIn) ExternalID() string     { return string(m.ExternalID_) }
+func (m *MsgIn) ExternalID() string     { return string(m.ExternalIdentifier_) }
 func (m *MsgIn) Text() string           { return m.Text_ }
 func (m *MsgIn) Attachments() []string  { return []string(m.Attachments_) }
 func (m *MsgIn) ReceivedOn() *time.Time { return m.SentOn_ }
+
+const sqlInsertIncomingMsg = `
+INSERT INTO
+	msgs_msg(org_id, uuid, direction, text, attachments, msg_type, msg_count, error_count, high_priority, status, is_android,
+             visibility, external_identifier, channel_id, contact_id, contact_urn_id, created_on, modified_on, sent_on, log_uuids)
+    VALUES(:org_id, :uuid, 'I', :text, :attachments, 'T', 1, 0, FALSE, 'P', FALSE,
+             'V', :external_identifier, :channel_id, :contact_id, :contact_urn_id, :created_on, :modified_on, :sent_on, :log_uuids)`
+
+// InsertIncomingMsg inserts the passed in incoming message into the database
+func InsertIncomingMsg(ctx context.Context, db *sqlx.DB, m *MsgIn) error {
+	_, err := db.NamedExecContext(ctx, sqlInsertIncomingMsg, m)
+	return err
+}
 
 type MsgOrigin string
 
@@ -97,9 +126,19 @@ const (
 	MsgOriginChat      MsgOrigin = "chat"
 )
 
+const QuickReplyTypeLocation = "location"
+
 type QuickReply struct {
-	Text  string `json:"text"            validate:"required"`
+	Type  string `json:"type"            validate:"required"`
+	Text  string `json:"text,omitempty"`
 	Extra string `json:"extra,omitempty"`
+}
+
+func (qr QuickReply) GetText() string {
+	if qr.Type == QuickReplyTypeLocation && qr.Text == "" {
+		return "Send Location"
+	}
+	return qr.Text
 }
 
 // ContactReference is information about a contact provided on queued outgoing messages
@@ -107,16 +146,13 @@ type ContactReference struct {
 	ID         ContactID   `json:"id"   validate:"required"`      // for creating session timeout fires in Postgres
 	UUID       ContactUUID `json:"uuid" validate:"uuid,required"` // for creating status updates in DynamoDB
 	LastSeenOn *time.Time  `json:"last_seen_on,omitempty"`
-	OtherURNs  []urns.URN  `json:"other_urns,omitempty"`
+	OtherURNs  []urns.URN  `json:"other_urns,omitempty"` // contact's URNs other than the one used for this message
 }
 
-// HasOtherURN returns true if the contact already has the given URN in OtherURNs
+// HasOtherURN returns true if the contact has the given URN in their OtherURNs list
 func (c *ContactReference) HasOtherURN(urn urns.URN) bool {
-	if c == nil {
-		return false
-	}
 	for _, u := range c.OtherURNs {
-		if u == urn {
+		if u.Identity() == urn.Identity() {
 			return true
 		}
 	}
@@ -202,3 +238,43 @@ func (m *MsgOut) OptIn() *OptInReference       { return m.OptIn_ }
 func (m *MsgOut) UserID() UserID               { return m.UserID_ }
 func (m *MsgOut) Session() *Session            { return m.Session_ }
 func (m *MsgOut) HighPriority() bool           { return m.HighPriority_ }
+
+// QuickRepliesToRows takes a slice of quick replies and re-organizes it into rows and columns
+func QuickRepliesToRows(replies []QuickReply, maxRows, maxRowRunes, paddingRunes int) [][]QuickReply {
+	// calculate rune length if it's all one row
+	totalRunes := 0
+	for i := range replies {
+		totalRunes += utf8.RuneCountInString(replies[i].GetText()) + paddingRunes*2
+	}
+
+	if totalRunes <= maxRowRunes {
+		// if all strings fit on a single row, do that
+		return [][]QuickReply{replies}
+	} else if len(replies) <= maxRows {
+		// if each string can be a row, do that
+		rows := make([][]QuickReply, len(replies))
+		for i := range replies {
+			rows[i] = []QuickReply{replies[i]}
+		}
+		return rows
+	}
+
+	rows := [][]QuickReply{{}}
+	curRow := 0
+	rowRunes := 0
+
+	for _, reply := range replies {
+		strRunes := utf8.RuneCountInString(reply.GetText()) + paddingRunes*2
+
+		// take a new row if we can't fit this string and the current row isn't empty and we haven't hit the row limit
+		if rowRunes+strRunes > maxRowRunes && len(rows[curRow]) > 0 && len(rows) < maxRows {
+			rows = append(rows, []QuickReply{})
+			curRow += 1
+			rowRunes = 0
+		}
+
+		rows[curRow] = append(rows[curRow], reply)
+		rowRunes += strRunes
+	}
+	return rows
+}

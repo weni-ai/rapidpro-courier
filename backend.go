@@ -2,11 +2,9 @@ package courier
 
 import (
 	"context"
-	"net/http"
 
 	"github.com/gomodule/redigo/redis"
-	"github.com/nyaruka/courier/core/models"
-	"github.com/nyaruka/gocommon/httpx"
+	"github.com/nyaruka/courier/v26/core/models"
 	"github.com/nyaruka/gocommon/urns"
 )
 
@@ -26,12 +24,6 @@ type Backend interface {
 
 	// GetContact returns (or creates) the contact for the passed in channel and URN
 	GetContact(context.Context, Channel, urns.URN, map[string]string, string, bool, *ChannelLog) (Contact, error)
-
-	// AddURNtoContact adds a URN to the passed in contact
-	AddURNtoContact(context context.Context, channel Channel, contact Contact, urn urns.URN, authTokens map[string]string) (urns.URN, error)
-
-	// RemoveURNFromcontact removes a URN from the passed in contact
-	RemoveURNfromContact(context context.Context, channel Channel, contact Contact, urn urns.URN) (urns.URN, error)
 
 	// DeleteMsgByExternalID deletes a message that has been deleted on the channel side
 	DeleteMsgByExternalID(ctx context.Context, channel Channel, externalID string) error
@@ -73,7 +65,7 @@ type Backend interface {
 	ClearMsgSent(context.Context, models.MsgUUID) error
 
 	// OnSendComplete is called when the sender has finished trying to send a message
-	OnSendComplete(context.Context, MsgOut, StatusUpdate, *ChannelLog, urns.URN)
+	OnSendComplete(context.Context, MsgOut, StatusUpdate, *SendResult, *ChannelLog)
 
 	// OnReceiveComplete is called when the server has finished handling an incoming request
 	OnReceiveComplete(context.Context, Channel, []Event, *ChannelLog)
@@ -83,16 +75,6 @@ type Backend interface {
 
 	// ResolveMedia resolves an outgoing attachment URL to a media object
 	ResolveMedia(context.Context, string) (*models.Media, error)
-
-	// HttpClient returns an HTTP client for making external requests
-	HttpClient(bool) *http.Client
-	HttpAccess() *httpx.AccessConfig
-
-	// Health returns a string describing any health problems the backend has, or empty string if all is well
-	Health() string
-
-	// Status returns a string describing the current status, this can detail queue sizes or other attributes
-	Status() string
 
 	// RedisPool returns the redisPool for this backend
 	RedisPool() *redis.Pool

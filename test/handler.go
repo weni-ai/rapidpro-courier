@@ -5,9 +5,11 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/nyaruka/courier"
-	"github.com/nyaruka/courier/core/models"
-	"github.com/nyaruka/courier/utils/clogs"
+	"github.com/nyaruka/courier/v26"
+	"github.com/nyaruka/courier/v26/core/models"
+	"github.com/nyaruka/courier/v26/runtime"
+	"github.com/nyaruka/courier/v26/utils"
+	"github.com/nyaruka/courier/v26/utils/clogs"
 	"github.com/nyaruka/gocommon/httpx"
 	"github.com/nyaruka/gocommon/urns"
 )
@@ -17,7 +19,7 @@ func init() {
 }
 
 type mockHandler struct {
-	server  courier.Server
+	rt      *runtime.Runtime
 	backend courier.Backend
 }
 
@@ -26,7 +28,8 @@ func NewMockHandler() courier.ChannelHandler {
 	return &mockHandler{}
 }
 
-func (h *mockHandler) Server() courier.Server                { return h.server }
+func (h *mockHandler) Runtime() *runtime.Runtime             { return h.rt }
+func (h *mockHandler) Backend() courier.Backend              { return h.backend }
 func (h *mockHandler) ChannelName() string                   { return "Mock Handler" }
 func (h *mockHandler) ChannelType() models.ChannelType       { return models.ChannelType("MCK") }
 func (h *mockHandler) UseChannelRouteUUID() bool             { return true }
@@ -38,8 +41,8 @@ func (h *mockHandler) GetChannel(ctx context.Context, r *http.Request) (courier.
 }
 
 // Initialize is called by the engine once everything is loaded
-func (h *mockHandler) Initialize(s courier.Server) error {
-	h.server = s
+func (h *mockHandler) Initialize(s *courier.Server) error {
+	h.rt = s.Runtime()
 	h.backend = s.Backend()
 	s.AddHandlerRoute(h, http.MethodGet, "receive", courier.ChannelLogTypeMsgReceive, h.receiveMsg)
 	return nil
@@ -47,16 +50,19 @@ func (h *mockHandler) Initialize(s courier.Server) error {
 
 // Send sends the given message, logging any HTTP calls or errors
 func (h *mockHandler) Send(ctx context.Context, msg courier.MsgOut, res *courier.SendResult, clog *courier.ChannelLog) error {
-	// log a request that contains a header value that should be redacted
+	// log a request that contains a header value that should be redacted; goes through the runtime's
+	// HTTP client so tests can intercept it with a mocking transport
 	req, _ := httpx.NewRequest(ctx, "GET", "http://mock.com/send", nil, map[string]string{"Authorization": "Token sesame"})
-	trace, err := httpx.DoTrace(http.DefaultClient, req, nil, nil, 1024)
-	clog.HTTP(trace)
+	trace, resp, err := utils.TraceHTTP(h.rt.HTTP, req, 1024)
+	if trace != nil {
+		clog.HTTP(trace)
+	}
 
-	if err != nil || trace.Response.StatusCode/100 == 5 {
+	if err != nil || resp.StatusCode/100 == 5 {
 		return courier.ErrConnectionFailed
-	} else if trace.Response.StatusCode == 403 {
+	} else if resp.StatusCode == 403 {
 		return courier.ErrContactStopped
-	} else if trace.Response.StatusCode == 429 {
+	} else if resp.StatusCode == 429 {
 		return courier.ErrConnectionThrottled
 	}
 

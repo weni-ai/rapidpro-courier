@@ -1,13 +1,15 @@
 package whatsapp
 
 import (
+	"cmp"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 
-	"github.com/nyaruka/courier/core/models"
-	"github.com/nyaruka/courier/handlers"
-	"github.com/nyaruka/courier/utils"
+	"github.com/nyaruka/courier/v26/core/models"
+	"github.com/nyaruka/courier/v26/handlers"
+	"github.com/nyaruka/courier/v26/utils"
 )
 
 func GetTemplatePayload(templating *models.Templating) *Template {
@@ -21,7 +23,11 @@ func GetTemplatePayload(templating *models.Templating) *Template {
 		// get the variables used by this component in order of their names 1, 2 etc
 		compParams := make([]models.TemplatingVariable, 0, len(comp.Variables))
 
-		for _, varName := range slices.Sorted(maps.Keys(comp.Variables)) {
+		for _, varName := range slices.SortedFunc(maps.Keys(comp.Variables), func(a, b string) int {
+			ai, _ := strconv.Atoi(a)
+			bi, _ := strconv.Atoi(b)
+			return cmp.Compare(ai, bi)
+		}) {
 			compParams = append(compParams, templating.Variables[comp.Variables[varName]])
 		}
 
@@ -39,12 +45,19 @@ func GetTemplatePayload(templating *models.Templating) *Template {
 					}
 
 					if attType == "image" {
-						component.Params = append(component.Params, &Param{Type: "image", Image: &Media{Link: attURL}})
+						component.Params = append(component.Params, &Param{Type: "image", Image: &struct {
+							Link string "json:\"link,omitempty\""
+						}{Link: attURL}})
 					} else if attType == "video" {
-						component.Params = append(component.Params, &Param{Type: "video", Video: &Media{Link: attURL}})
+						component.Params = append(component.Params, &Param{Type: "video", Video: &struct {
+							Link string "json:\"link,omitempty\""
+						}{Link: attURL}})
 					} else if attType == "document" {
 						filename, _ := utils.BasePathForURL(attURL)
-						component.Params = append(component.Params, &Param{Type: "document", Document: &Media{Link: attURL, Filename: filename}})
+						component.Params = append(component.Params, &Param{Type: "document", Document: &struct {
+							Link     string "json:\"link,omitempty\""
+							Filename string `json:"filename,omitempty"`
+						}{Link: attURL, Filename: filename}})
 					}
 				} else {
 					component.Params = append(component.Params, &Param{Type: p.Type, Text: p.Value})
