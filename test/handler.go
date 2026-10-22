@@ -60,7 +60,7 @@ func (h *mockHandler) Send(ctx context.Context, msg courier.MsgOut, res *courier
 	}
 
 	// log an error than contains a value that should be redacted
-	clog.Error(clogs.NewLogError("seeds", "", "contains sesame seeds"))
+	clog.Error(&clogs.Error{Code: "seeds", Message: "contains sesame seeds"})
 
 	if msg.Text() == "err:config" {
 		return courier.ErrChannelConfig
@@ -94,7 +94,7 @@ func (h *mockHandler) receiveMsg(ctx context.Context, channel courier.Channel, w
 		return nil, errors.New("missing from or text")
 	}
 
-	msg := h.backend.NewIncomingMsg(channel, urns.URN("tel:"+from), text, "", clog)
+	msg := h.backend.NewIncomingMsg(ctx, channel, urns.URN("tel:"+from), text, "", clog)
 	w.WriteHeader(200)
 	w.Write([]byte("ok"))
 	h.backend.WriteMsg(ctx, msg, clog)

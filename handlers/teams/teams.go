@@ -214,7 +214,7 @@ func (h *handler) receiveEvent(ctx context.Context, channel courier.Channel, w h
 			}
 		}
 
-		event := h.Backend().NewIncomingMsg(channel, urn, text, payload.ID, clog).WithReceivedOn(date)
+		event := h.Backend().NewIncomingMsg(ctx, channel, urn, text, payload.ID, clog).WithReceivedOn(date)
 
 		// add any attachment URL found
 		for _, attURL := range attachmentURLs {
