@@ -1,11 +1,7 @@
 package telegram
 
 import (
-	"strings"
-
-	"github.com/nyaruka/courier/core/models"
-	"github.com/nyaruka/courier/handlers"
-	"github.com/nyaruka/courier/utils"
+	"github.com/nyaruka/courier/v26/core/models"
 )
 
 // KeyboardButton is button on a keyboard, see https://core.telegram.org/bots/api/#keyboardbutton
@@ -24,21 +20,17 @@ type ReplyKeyboardMarkup struct {
 
 // NewKeyboardFromReplies creates a keyboard from the given quick replies
 func NewKeyboardFromReplies(replies []models.QuickReply) *ReplyKeyboardMarkup {
-	rows := utils.StringsToRows(handlers.TextOnlyQuickReplies(replies), 5, 30, 2)
+	rows := models.QuickRepliesToRows(replies, 5, 30, 2)
 	keyboard := make([][]KeyboardButton, len(rows))
 
 	for i := range rows {
 		keyboard[i] = make([]KeyboardButton, len(rows[i]))
 		for j := range rows[i] {
-			var text string
-			if strings.Contains(rows[i][j], "\\/") {
-				text = strings.Replace(rows[i][j], "\\", "", -1)
-			} else if strings.Contains(rows[i][j], "\\\\") {
-				text = strings.Replace(rows[i][j], "\\\\", "\\", -1)
-			} else {
-				text = rows[i][j]
+			keyboard[i][j].Text = rows[i][j].GetText()
+			if rows[i][j].Type == models.QuickReplyTypeLocation {
+				keyboard[i][j].RequestLocation = true
 			}
-			keyboard[i][j].Text = text
+
 		}
 	}
 

@@ -8,8 +8,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/nyaruka/courier"
-	"github.com/nyaruka/courier/core/models"
+	"github.com/nyaruka/courier/v26"
+	"github.com/nyaruka/courier/v26/core/models"
 	"github.com/nyaruka/gocommon/dbutil"
 	"github.com/nyaruka/gocommon/urns"
 	"github.com/nyaruka/gocommon/uuids"
@@ -59,12 +59,12 @@ func contactForURN(ctx context.Context, b *backend, org models.OrgID, channel *m
 			return nil, fmt.Errorf("error beginning transaction: %w", err)
 		}
 
-		// update contact's URNs so this URN has priority
-		err = models.SetDefaultURN(ctx, tx, channel, contact, urn, authTokens)
+		// update channel, display and auth tokens on the URN (priority reordering is delegated to mailroom)
+		err = models.UpdateContactURNMetadata(ctx, tx, channel, contact, urn, authTokens)
 		if err != nil {
-			log.Error("error updating default URN for contact", "error", err)
+			log.Error("error updating URN metadata for contact", "error", err)
 			tx.Rollback()
-			return nil, fmt.Errorf("error setting default URN for contact: %w", err)
+			return nil, fmt.Errorf("error updating URN metadata for contact: %w", err)
 		}
 		return contact, tx.Commit()
 	}
@@ -163,7 +163,7 @@ func contactForURN(ctx context.Context, b *backend, org models.OrgID, channel *m
 
 // contactForMsg resolves the contact for an incoming message. Normally that's a lookup by (or creation from) the
 // message's primary URN. But when a WhatsApp message arrives with a phone number as its primary URN and a
-// business-scoped user ID attached as its new URN, and the phone number doesn't match an existing contact, we also
+// business-scoped user ID (BSUID URN) attached as its new URN, and the phone number doesn't match an existing contact, we also
 // look for one by the BSUID so a contact created while the phone was omitted is reused rather than duplicated.
 func contactForMsg(ctx context.Context, b *backend, m *MsgIn, clog *courier.ChannelLog) (*models.Contact, error) {
 	altURN := altLookupURN(m)
@@ -196,7 +196,7 @@ func contactForMsg(ctx context.Context, b *backend, m *MsgIn, clog *courier.Chan
 }
 
 func altLookupURN(m *MsgIn) urns.URN {
-	if m.NewURN_ != nil && m.URN_.Scheme() == urns.WhatsApp.Prefix && courier.IsWhatsAppBSUID(m.NewURN_.Value) {
+	if m.NewURN_ != nil && m.URN_.Scheme() == urns.WhatsApp.Prefix && m.NewURN_.Value.Scheme() == urns.BSUID.Prefix {
 		return m.NewURN_.Value
 	}
 	return urns.NilURN

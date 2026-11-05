@@ -17,20 +17,20 @@ import (
 	"time"
 
 	"github.com/buger/jsonparser"
-	"github.com/nyaruka/courier"
-	"github.com/nyaruka/courier/core/models"
-	"github.com/nyaruka/courier/handlers"
-	"github.com/nyaruka/courier/handlers/meta/messenger"
-	"github.com/nyaruka/courier/handlers/meta/whatsapp"
-	"github.com/nyaruka/courier/utils"
+	"github.com/nyaruka/courier/v26"
+	"github.com/nyaruka/courier/v26/core/models"
+	"github.com/nyaruka/courier/v26/handlers"
+	"github.com/nyaruka/courier/v26/handlers/meta/messenger"
+	"github.com/nyaruka/courier/v26/handlers/meta/whatsapp"
+	"github.com/nyaruka/courier/v26/utils"
 	"github.com/nyaruka/gocommon/jsonx"
 	"github.com/nyaruka/gocommon/urns"
 )
 
 // Endpoints we hit
 var (
-	sendURL  = "https://graph.facebook.com/v18.0/me/messages"
-	graphURL = "https://graph.facebook.com/v18.0/"
+	sendURL  = "https://graph.facebook.com/v22.0/me/messages"
+	graphURL = "https://graph.facebook.com/v22.0/"
 
 	signatureHeader = "X-Hub-Signature-256"
 
@@ -73,7 +73,7 @@ type handler struct {
 }
 
 // Initialize is called by the engine once everything is loaded
-func (h *handler) Initialize(s courier.Server) error {
+func (h *handler) Initialize(s *courier.Server) error {
 	h.SetServer(s)
 	s.AddHandlerRoute(h, http.MethodGet, "receive", courier.ChannelLogTypeWebhookVerify, h.receiveVerify)
 	s.AddHandlerRoute(h, http.MethodPost, "receive", courier.ChannelLogTypeMultiReceive, handlers.JSONPayload(h, h.receiveEvents))
@@ -109,18 +109,9 @@ type Notifications struct {
 	} `json:"entry"`
 }
 
-type FeedbackQuestion struct {
-	Type     string `json:"type"`
-	Payload  string `json:"payload"`
-	FollowUp *struct {
-		Type    string `json:"type"`
-		Payload string `json:"payload"`
-	} `json:"follow_up"`
-}
-
 func (h *handler) RedactValues(ch courier.Channel) []string {
 	vals := h.BaseHandler.RedactValues(ch)
-	vals = append(vals, h.Server().Config().FacebookApplicationSecret, h.Server().Config().FacebookWebhookSecret, h.Server().Config().WhatsappAdminSystemUserToken)
+	vals = append(vals, h.Runtime().Config.FacebookApplicationSecret, h.Runtime().Config.FacebookWebhookSecret, h.Runtime().Config.WhatsappAdminSystemUserToken)
 	return vals
 }
 
@@ -184,17 +175,9 @@ func (h *handler) receiveVerify(ctx context.Context, channel courier.Channel, w 
 
 	// verify the token against our server facebook webhook secret, if the same return the challenge FB sent us
 	secret := r.URL.Query().Get("hub.verify_token")
-
-	if fmt.Sprint(h.ChannelType()) == "FBA" || fmt.Sprint(h.ChannelType()) == "IG" {
-		if !utils.SecretEqual(secret, h.Server().Config().FacebookWebhookSecret) {
-			return nil, handlers.WriteAndLogRequestError(ctx, h, channel, w, r, fmt.Errorf("token does not match secret"))
-		}
-	} else {
-		if !utils.SecretEqual(secret, h.Server().Config().WhatsappCloudWebhookSecret) {
-			return nil, handlers.WriteAndLogRequestError(ctx, h, channel, w, r, fmt.Errorf("token does not match secret"))
-		}
+	if !utils.SecretEqual(secret, h.Runtime().Config.FacebookWebhookSecret) {
+		return nil, handlers.WriteAndLogRequestError(ctx, h, channel, w, r, fmt.Errorf("token does not match secret"))
 	}
-
 	// and respond with the challenge token
 	_, err := fmt.Fprint(w, r.URL.Query().Get("hub.challenge"))
 	return nil, err
@@ -202,7 +185,7 @@ func (h *handler) receiveVerify(ctx context.Context, channel courier.Channel, w 
 
 func (h *handler) resolveMediaURL(mediaID string, token string, clog *courier.ChannelLog) (string, error) {
 	if token == "" {
-		return "", fmt.Errorf("missing token for WAC channel")
+		return "", fmt.Errorf("missing token for WA channel")
 	}
 
 	base, _ := url.Parse(graphURL)
@@ -247,13 +230,7 @@ func (h *handler) receiveEvents(ctx context.Context, channel courier.Channel, w 
 		events, data, err = h.processFacebookInstagramPayload(ctx, channel, payload, w, r, clog)
 	} else {
 		events, data, err = h.processWhatsAppPayload(ctx, channel, payload, w, r, clog)
-		webhook := channel.ConfigForKey("webhook", nil)
-		if webhook != nil {
-			er := handlers.SendWebhooks(channel, r, webhook, clog)
-			if er != nil {
-				courier.LogRequestError(r, channel, fmt.Errorf("could not send webhook: %s", er))
-			}
-		}
+
 	}
 
 	if err != nil {
@@ -267,10 +244,10 @@ func (h *handler) processWhatsAppPayload(ctx context.Context, channel courier.Ch
 	// the list of events we deal with
 	events := make([]courier.Event, 0, 2)
 
-	token := h.Server().Config().WhatsappAdminSystemUserToken
-
 	// the list of data we will return in our response
 	data := make([]any, 0, 2)
+
+	token := h.Runtime().Config.WhatsappAdminSystemUserToken
 
 	seenMsgIDs := make(map[string]bool, 2)
 	contactNames := make(map[string]string)
@@ -284,96 +261,52 @@ func (h *handler) processWhatsAppPayload(ctx context.Context, channel courier.Ch
 		for _, change := range entry.Changes {
 
 			for _, contact := range change.Value.Contacts {
-				if contact.WaID != "" {
-					contactNames[contact.WaID] = contact.Profile.Name
-				}
-				if contact.UserID != "" {
-					contactNames[contact.UserID] = contact.Profile.Name
-				}
+				contactNames[contact.WaID] = contact.Profile.Name
 			}
 
-			for _, msg := range change.Value.Messages {
-				if seenMsgIDs[msg.ID] {
+			for _, waMsg := range change.Value.Messages {
+				if seenMsgIDs[waMsg.ID] {
 					continue
 				}
 
-				// create our date from the timestamp
-				ts, err := strconv.ParseInt(msg.Timestamp, 10, 64)
-				if err != nil {
-					return nil, nil, handlers.WriteAndLogRequestError(ctx, h, channel, w, r, fmt.Errorf("invalid timestamp: %s", msg.Timestamp))
-				}
-				date := parseTimestamp(ts)
-
-				sender := whatsapp.Identifier(msg.From, msg.FromUserID)
-				urn, err := urns.New(urns.WhatsApp, sender)
-				if err != nil {
-					return nil, nil, handlers.WriteAndLogRequestError(ctx, h, channel, w, r, errors.New("invalid whatsapp id"))
-				}
-
-				for _, msgError := range msg.Errors {
-					clog.Error(courier.ErrorExternal(strconv.Itoa(msgError.Code), msgError.Title))
-				}
-
-				text := ""
-				mediaURL := ""
-
-				if msg.Type == "text" {
-					text = msg.Text.Body
-				} else if msg.Type == "audio" && msg.Audio != nil {
-					text = msg.Audio.Caption
-					mediaURL, err = h.resolveMediaURL(msg.Audio.ID, token, clog)
-				} else if msg.Type == "voice" && msg.Voice != nil {
-					text = msg.Voice.Caption
-					mediaURL, err = h.resolveMediaURL(msg.Voice.ID, token, clog)
-				} else if msg.Type == "button" && msg.Button != nil {
-					text = msg.Button.Text
-				} else if msg.Type == "document" && msg.Document != nil {
-					text = msg.Document.Caption
-					mediaURL, err = h.resolveMediaURL(msg.Document.ID, token, clog)
-				} else if msg.Type == "image" && msg.Image != nil {
-					text = msg.Image.Caption
-					mediaURL, err = h.resolveMediaURL(msg.Image.ID, token, clog)
-				} else if msg.Type == "video" && msg.Video != nil {
-					text = msg.Video.Caption
-					mediaURL, err = h.resolveMediaURL(msg.Video.ID, token, clog)
-				} else if msg.Type == "location" && msg.Location != nil {
-					mediaURL = fmt.Sprintf("geo:%f,%f", msg.Location.Latitude, msg.Location.Longitude)
-				} else if msg.Type == "interactive" && msg.Interactive.Type == "button_reply" {
-					text = msg.Interactive.ButtonReply.Title
-				} else if msg.Type == "interactive" && msg.Interactive.Type == "list_reply" {
-					text = msg.Interactive.ListReply.Title
-				} else if msg.Type == "contacts" {
-
-					if len(msg.Contacts) == 0 {
-						return nil, nil, handlers.WriteAndLogRequestError(ctx, h, channel, w, r, errors.New("no shared contact"))
-					}
-
-					// put phones in a comma-separated string
-					var phones []string
-					for _, phone := range msg.Contacts[0].Phones {
-						phones = append(phones, phone.Phone)
-					}
-					text = strings.Join(phones, ", ")
-				} else {
-					// we received a message type we do not support.
-					courier.LogRequestError(r, channel, fmt.Errorf("unsupported message type %s", msg.Type))
+				if waMsg.GroupID != "" {
+					data = append(data, courier.NewInfoData("ignoring group message"))
 					continue
+				}
+
+				date, urn, text, mediaURL, mediaID, err, finalErr := waMsg.ExtractData(clog)
+				if finalErr != nil {
+					return nil, nil, handlers.WriteAndLogRequestError(ctx, h, channel, w, r, finalErr)
+				}
+
+				if err != nil {
+					courier.LogRequestError(r, channel, err)
+					continue
+				}
+
+				if mediaID != "" && mediaURL == "" {
+					mediaURL, err = h.resolveMediaURL(mediaID, token, clog)
+					// we had an error downloading media
+					if err != nil {
+						courier.LogRequestError(r, channel, err)
+					}
 				}
 
 				// create our message
-				event := h.Backend().NewIncomingMsg(ctx, channel, urn, text, msg.ID, clog).WithReceivedOn(date).WithContactName(contactNames[sender])
-
-				// we had an error downloading media
-				if err != nil {
-					courier.LogRequestError(r, channel, err)
-				}
+				event := h.Backend().NewIncomingMsg(ctx, channel, urn, text, waMsg.ID, clog).WithReceivedOn(date).WithContactName(contactNames[waMsg.From])
 
 				if mediaURL != "" {
 					event.WithAttachment(mediaURL)
 				}
 
-				if urnErr := whatsapp.AttachUserID(event, urn, msg.FromUserID); urnErr != nil {
-					courier.LogRequestError(r, channel, urnErr)
+				// if we have a user_id, add it as secondary BSUID URN
+				if waMsg.FromUserID != "" {
+					userIDURN, urnErr := urns.New(urns.BSUID, waMsg.FromUserID)
+					if urnErr == nil {
+						event.WithNewURN(userIDURN, models.NewURNAppend)
+					} else {
+						courier.LogRequestError(r, channel, fmt.Errorf("invalid user_id for BSUID URN: %w", urnErr))
+					}
 				}
 
 				err = h.Backend().WriteMsg(ctx, event, clog)
@@ -383,7 +316,7 @@ func (h *handler) processWhatsAppPayload(ctx context.Context, channel courier.Ch
 
 				events = append(events, event)
 				data = append(data, courier.NewMsgReceiveData(event))
-				seenMsgIDs[msg.ID] = true
+				seenMsgIDs[waMsg.ID] = true
 			}
 
 			for _, status := range change.Value.Statuses {
@@ -399,7 +332,7 @@ func (h *handler) processWhatsAppPayload(ctx context.Context, channel courier.Ch
 				}
 
 				for _, statusError := range status.Errors {
-					clog.Error(courier.ErrorExternal(strconv.Itoa(statusError.Code), statusError.Title))
+					statusError.ErrorChannelLog(clog)
 				}
 
 				event := h.Backend().NewStatusUpdateByExternalID(channel, status.ID, msgStatus, clog)
@@ -414,7 +347,7 @@ func (h *handler) processWhatsAppPayload(ctx context.Context, channel courier.Ch
 			}
 
 			for _, chError := range change.Value.Errors {
-				clog.Error(courier.ErrorExternal(strconv.Itoa(chError.Code), chError.Title))
+				chError.ErrorChannelLog(clog)
 			}
 
 		}
@@ -488,19 +421,6 @@ func (h *handler) processFacebookInstagramPayload(ctx context.Context, channel c
 					WithExtra(map[string]string{titleKey: msg.OptIn.Title, payloadKey: msg.OptIn.Payload}).
 					WithURNAuthTokens(map[string]string{fmt.Sprintf("optin:%s", msg.OptIn.Payload): authToken})
 			} else {
-
-				// this is an opt in, if we have a user_ref, use that as our URN (this is a checkbox plugin)
-				// TODO:
-				//    We need to deal with the case of them responding and remapping the user_ref in that case:
-				//    https://developers.facebook.com/docs/messenger-platform/discovery/checkbox-plugin
-				//    Right now that we even support this isn't documented and I don't think anybody uses it, so leaving that out.
-				//    (things will still work, we just will have dupe contacts, one with user_ref for the first contact, then with the real id when they reply)
-				if msg.OptIn.UserRef != "" {
-					urn, err = urns.New(urns.Facebook, urns.FacebookRefPrefix+msg.OptIn.UserRef)
-					if err != nil {
-						return nil, nil, handlers.WriteAndLogRequestError(ctx, h, channel, w, r, err)
-					}
-				}
 
 				event = h.Backend().NewChannelEvent(channel, models.EventTypeReferral, urn, clog).
 					WithOccurredOn(date).
@@ -652,28 +572,6 @@ func (h *handler) processFacebookInstagramPayload(ctx context.Context, channel c
 				data = append(data, courier.NewStatusData(event))
 			}
 
-		} else if msg.MessagingFeedback != nil {
-
-			payloads := []string{}
-			for _, v := range msg.MessagingFeedback.FeedbackScreens[0].Questions {
-				payloads = append(payloads, v.Payload)
-				if v.FollowUp != nil {
-					payloads = append(payloads, v.FollowUp.Payload)
-				}
-			}
-
-			text := strings.Join(payloads[:], "|")
-
-			event := h.Backend().NewIncomingMsg(ctx, channel, urn, text, msg.Message.MID, clog).WithReceivedOn(date)
-
-			err := h.Backend().WriteMsg(ctx, event, clog)
-			if err != nil {
-				return nil, nil, err
-			}
-
-			events = append(events, event)
-			data = append(data, courier.NewMsgReceiveData(event))
-			seenMsgIDs[msg.Message.MID] = true
 		} else {
 			data = append(data, courier.NewInfoData("ignoring unknown entry type"))
 		}
@@ -703,9 +601,7 @@ func (h *handler) sendFacebookInstagramMsg(ctx context.Context, msg courier.MsgO
 	payload := &messenger.SendRequest{}
 
 	// build our recipient
-	if IsFacebookRef(msg.URN()) {
-		payload.Recipient.UserRef = FacebookRef(msg.URN())
-	} else if msg.URNAuth() != "" {
+	if msg.URNAuth() != "" {
 		payload.Recipient.NotificationMessagesToken = msg.URNAuth()
 	} else {
 		payload.Recipient.ID = msg.URN().Path()
@@ -727,119 +623,6 @@ func (h *handler) sendFacebookInstagramMsg(ctx context.Context, msg courier.MsgO
 	query.Set("access_token", accessToken)
 	msgURL.RawQuery = query.Encode()
 
-	status := h.Backend().NewStatusUpdate(msg.Channel(), msg.UUID(), models.MsgStatusErrored, clog)
-
-	isCustomerFeedbackTemplateMsg := strings.Contains(msg.Text(), "{customer_feedback_template}")
-
-	if isCustomerFeedbackTemplateMsg {
-		if msg.Text() != "" {
-			text := strings.ReplaceAll(strings.ReplaceAll(msg.Text(), "\n", ""), "\t", "")
-
-			splited := strings.Split(text, "|")
-			templateMap := make(map[string]string)
-			for i := 1; i < len(splited); i++ {
-				field := strings.Split(splited[i], ":")
-				templateMap[strings.TrimSpace(field[0])] = strings.TrimSpace(field[1])
-			}
-
-			var payloadMap map[string]interface{}
-
-			if templateMap["follow_up"] != "" {
-				payloadMap = map[string]interface{}{
-					"recipient": map[string]string{
-						"id": msg.URN().Path(),
-					},
-					"message": map[string]interface{}{
-						"attachment": map[string]interface{}{
-							"type": "template",
-							"payload": map[string]interface{}{
-								"template_type": "customer_feedback",
-								"title":         templateMap["title"],
-								"subtitle":      templateMap["subtitle"],
-								"button_title":  templateMap["button_title"],
-								"feedback_screens": []map[string]interface{}{
-									{
-										"questions": []map[string]interface{}{
-											{
-												"id":           templateMap["question_id"],
-												"type":         templateMap["type"],
-												"title":        templateMap["question_title"],
-												"score_label":  templateMap["score_label"],
-												"score_option": templateMap["score_option"],
-												"follow_up": map[string]interface{}{
-													"type":        "free_form",
-													"placeholder": templateMap["follow_up_placeholder"],
-												},
-											},
-										},
-									},
-								},
-								"business_privacy": map[string]string{
-									"url": templateMap["business_privacy"],
-								},
-							},
-						},
-					},
-				}
-			} else {
-				payloadMap = map[string]interface{}{
-					"recipient": map[string]string{
-						"id": msg.URN().Path(),
-					},
-					"message": map[string]interface{}{
-						"attachment": map[string]interface{}{
-							"type": "template",
-							"payload": map[string]interface{}{
-								"template_type": "customer_feedback",
-								"title":         templateMap["title"],
-								"subtitle":      templateMap["subtitle"],
-								"button_title":  templateMap["button_title"],
-								"feedback_screens": []map[string]interface{}{
-									{
-										"questions": []map[string]interface{}{
-											{
-												"id":           templateMap["question_id"],
-												"type":         templateMap["type"],
-												"title":        templateMap["question_title"],
-												"score_label":  templateMap["score_label"],
-												"score_option": templateMap["score_option"],
-											},
-										},
-									},
-								},
-								"business_privacy": map[string]string{
-									"url": templateMap["business_privacy"],
-								},
-							},
-						},
-					},
-				}
-			}
-
-			jsonBody, err := json.Marshal(payloadMap)
-			if err != nil {
-				return err
-			}
-
-			msgURL, _ := url.Parse("https://graph.facebook.com/v12.0/me/messages")
-			query := url.Values{}
-			query.Set("access_token", accessToken)
-			msgURL.RawQuery = query.Encode()
-
-			req, err := http.NewRequest(http.MethodPost, msgURL.String(), bytes.NewReader(jsonBody))
-			if err != nil {
-				return err
-			}
-			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("Accept", "application/json")
-			_, _, err = h.RequestHTTP(req, clog)
-			if err != nil {
-				return nil
-			}
-			status.SetStatus(models.MsgStatusWired)
-		}
-		return nil
-	}
 	// Send each text segment and attachment separately. We send attachments first as otherwise quick replies get
 	// attached to attachment segments and are hidden when images load.
 	for _, part := range handlers.SplitMsg(msg, handlers.SplitOptions{MaxTextLen: maxMsgLength}) {
@@ -870,7 +653,8 @@ func (h *handler) sendFacebookInstagramMsg(ctx context.Context, msg courier.MsgO
 
 		// include any quick replies on the last piece we send
 		if part.IsLast {
-			for _, qr := range msg.QuickReplies() {
+			qrs := handlers.FilterQuickRepliesByType(msg.QuickReplies(), "text")
+			for _, qr := range qrs {
 				payload.Message.QuickReplies = append(payload.Message.QuickReplies, messenger.QuickReply{Title: qr.Text, Payload: qr.Text, ContentType: "text"})
 			}
 		} else {
@@ -908,42 +692,6 @@ func (h *handler) sendFacebookInstagramMsg(ctx context.Context, msg courier.MsgO
 		}
 
 		res.AddExternalID(respPayload.ExternalID)
-		if IsFacebookRef(msg.URN()) {
-			recipientID := respPayload.RecipientID
-			if recipientID == "" {
-				return courier.ErrResponseUnexpected
-			}
-
-			referralID := FacebookRef(msg.URN())
-
-			realIDURN, err := urns.New(urns.Facebook, recipientID)
-			if err != nil {
-				clog.RawError(fmt.Errorf("unable to make facebook urn from %s", recipientID))
-			}
-
-			contact, err := h.Backend().GetContact(ctx, msg.Channel(), msg.URN(), nil, "", true, clog)
-			if err != nil {
-				clog.RawError(fmt.Errorf("unable to get contact for %s", msg.URN().String()))
-			}
-			realURN, err := h.Backend().AddURNtoContact(ctx, msg.Channel(), contact, realIDURN, nil)
-			if err != nil {
-				clog.RawError(fmt.Errorf("unable to add real facebook URN %s to contact with uuid %s", realURN.String(), contact.UUID()))
-			}
-			referralIDExtURN, err := urns.New(urns.External, referralID)
-			if err != nil {
-				clog.RawError(fmt.Errorf("unable to make ext urn from %s", referralID))
-			}
-			extURN, err := h.Backend().AddURNtoContact(ctx, msg.Channel(), contact, referralIDExtURN, nil)
-			if err != nil {
-				clog.RawError(fmt.Errorf("unable to add URN %s to contact with uuid %s", extURN.String(), contact.UUID()))
-			}
-
-			referralFacebookURN, err := h.Backend().RemoveURNfromContact(ctx, msg.Channel(), contact, msg.URN())
-			if err != nil {
-				clog.RawError(fmt.Errorf("unable to remove referral facebook URN %s from contact with uuid %s", referralFacebookURN.String(), contact.UUID()))
-			}
-
-		}
 	}
 
 	return nil
@@ -951,7 +699,7 @@ func (h *handler) sendFacebookInstagramMsg(ctx context.Context, msg courier.MsgO
 
 func (h *handler) sendWhatsAppMsg(ctx context.Context, msg courier.MsgOut, res *courier.SendResult, clog *courier.ChannelLog) error {
 	// can't do anything without an access token
-	accessToken := h.Server().Config().WhatsappAdminSystemUserToken
+	accessToken := h.Runtime().Config.WhatsappAdminSystemUserToken
 
 	base, _ := url.Parse(graphURL)
 	path, _ := url.Parse(fmt.Sprintf("/%s/messages", msg.Channel().Address()))
@@ -962,22 +710,37 @@ func (h *handler) sendWhatsAppMsg(ctx context.Context, msg courier.MsgOut, res *
 		return err
 	}
 
+	var userID string
 	for _, payload := range requestPayloads {
-		err := h.requestWAC(payload, accessToken, res, wacPhoneURL, clog)
+		respUserID, err := h.requestWAC(payload, accessToken, res, wacPhoneURL, clog)
 		if err != nil {
 			return err
+		}
+		if respUserID != "" {
+			userID = respUserID
+		}
+	}
+
+	// if we got a user_id in the response, set it as a new URN on the send result so the backend
+	// can queue a contact_changed task to append it to the contact
+	if userID != "" {
+		userIDURN, err := urns.New(urns.BSUID, userID)
+		if err != nil {
+			clog.RawError(fmt.Errorf("unable to make BSUID URN from user_id %s: %w", userID, err))
+		} else {
+			res.SetNewURN(userIDURN)
 		}
 	}
 
 	return nil
 }
 
-func (h *handler) requestWAC(payload whatsapp.SendRequest, accessToken string, res *courier.SendResult, wacPhoneURL *url.URL, clog *courier.ChannelLog) error {
+func (h *handler) requestWAC(payload whatsapp.SendRequest, accessToken string, res *courier.SendResult, wacPhoneURL *url.URL, clog *courier.ChannelLog) (string, error) {
 	jsonBody := jsonx.MustMarshal(payload)
 
 	req, err := http.NewRequest(http.MethodPost, wacPhoneURL.String(), bytes.NewReader(jsonBody))
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
@@ -986,44 +749,36 @@ func (h *handler) requestWAC(payload whatsapp.SendRequest, accessToken string, r
 
 	resp, respBody, err := h.RequestHTTP(req, clog)
 	if err != nil || resp.StatusCode/100 == 5 {
-		return courier.ErrConnectionFailed
+		return "", courier.ErrConnectionFailed
 	}
 
 	respPayload := &whatsapp.SendResponse{}
 	err = json.Unmarshal(respBody, respPayload)
 	if err != nil {
-		return courier.ErrResponseUnparseable
+		return "", courier.ErrResponseUnparseable
 	}
 
 	if slices.Contains(whatsapp.WACThrottlingErrorCodes, respPayload.Error.Code) {
-		return courier.ErrConnectionThrottled
+		return "", courier.ErrConnectionThrottled
 	}
 
-	if respPayload.Error.Code != 0 {
-		return courier.ErrFailedWithReason(strconv.Itoa(respPayload.Error.Code), respPayload.Error.Message)
+	if slices.Contains(whatsapp.WACRetryableErrorCodes, respPayload.Error.Code) {
+		return "", courier.ErrRetryableWithReason(strconv.Itoa(respPayload.Error.Code), respPayload.Error.Message)
 	}
 
-	externalID := respPayload.Messages[0].ID
-	if externalID != "" {
-		res.AddExternalID(externalID)
+	if respPayload.Error.Code != 0 || respPayload.Error.Message != "" {
+		return "", courier.ErrFailedWithReason(strconv.Itoa(respPayload.Error.Code), respPayload.Error.Message)
 	}
 
-	if userID := respPayload.UserID(); userID != "" {
-		if userIDURN, urnErr := urns.New(urns.WhatsApp, userID); urnErr == nil {
-			res.SetNewURN(userIDURN)
-		}
+	if len(respPayload.Messages) > 0 && respPayload.Messages[0].ID != "" {
+		res.AddExternalID(respPayload.Messages[0].ID)
 	}
-	return nil
+	return respPayload.UserID(), nil
 }
 
 // DescribeURN looks up URN metadata for new contacts
 func (h *handler) DescribeURN(ctx context.Context, channel courier.Channel, urn urns.URN, clog *courier.ChannelLog) (map[string]string, error) {
 	if channel.ChannelType() == "WAC" {
-		return map[string]string{}, nil
-	}
-
-	// can't do anything with facebook refs, ignore them
-	if IsFacebookRef(urn) {
 		return map[string]string{}, nil
 	}
 
@@ -1071,14 +826,7 @@ func (h *handler) validateSignature(r *http.Request) error {
 	if headerSignature == "" {
 		return fmt.Errorf("missing request signature")
 	}
-
-	var appSecret string
-
-	if fmt.Sprint(h.ChannelType()) == "FBA" || fmt.Sprint(h.ChannelType()) == "IG" {
-		appSecret = h.Server().Config().FacebookApplicationSecret
-	} else {
-		appSecret = h.Server().Config().WhatsappCloudApplicationSecret
-	}
+	appSecret := h.Runtime().Config.FacebookApplicationSecret
 
 	body, err := handlers.ReadBody(r, maxRequestBodyBytes)
 	if err != nil {
@@ -1115,8 +863,8 @@ func fbCalculateSignature(appSecret string, body []byte) (string, error) {
 }
 
 // BuildAttachmentRequest to download media for message attachment with Bearer token set
-func (h *handler) BuildAttachmentRequest(ctx context.Context, b courier.Backend, channel courier.Channel, attachmentURL string, clog *courier.ChannelLog) (*http.Request, error) {
-	token := h.Server().Config().WhatsappAdminSystemUserToken
+func (h *handler) BuildAttachmentRequest(ctx context.Context, channel courier.Channel, attachmentURL string, clog *courier.ChannelLog) (*http.Request, error) {
+	token := h.Runtime().Config.WhatsappAdminSystemUserToken
 	if token == "" {
 		return nil, fmt.Errorf("missing token for WAC channel")
 	}
@@ -1133,9 +881,11 @@ func (h *handler) BuildAttachmentRequest(ctx context.Context, b courier.Backend,
 var _ courier.AttachmentRequestBuilder = (*handler)(nil)
 
 func parseTimestamp(ts int64) time.Time {
-	// sometimes Facebook sends timestamps in seconds rather than milliseconds
+
 	if ts >= 1_000_000_000_000 {
 		return time.Unix(0, ts*1000000).UTC()
 	}
+
+	// sometimes Facebook sends timestamps in seconds rather than milliseconds
 	return time.Unix(ts, 0).UTC()
 }

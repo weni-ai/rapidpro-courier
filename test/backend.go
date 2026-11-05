@@ -5,15 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net/http"
 	"sync"
 	"time"
 
 	"github.com/gomodule/redigo/redis"
-	"github.com/nyaruka/courier"
-	"github.com/nyaruka/courier/core/models"
-	"github.com/nyaruka/courier/utils"
-	"github.com/nyaruka/gocommon/httpx"
+	"github.com/nyaruka/courier/v26"
+	"github.com/nyaruka/courier/v26/core/models"
+	"github.com/nyaruka/courier/v26/utils"
 	"github.com/nyaruka/gocommon/urns"
 	"github.com/nyaruka/gocommon/uuids"
 )
@@ -108,6 +106,11 @@ func (mb *MockBackend) NewIncomingMsg(ctx context.Context, channel courier.Chann
 func (mb *MockBackend) NewOutgoingMsg(channel courier.Channel, uuid models.MsgUUID, contact *models.ContactReference, urn urns.URN, text string, highPriority bool, quickReplies []models.QuickReply,
 	responseToExternalID string, origin models.MsgOrigin) courier.MsgOut {
 
+	// pre-register contact so it can be found by ID later (e.g. by QueueContactChanged)
+	if _, found := mb.contacts[urn]; !found {
+		mb.contacts[urn] = &mockContact{channel: channel, urn: urn, id: contact.ID, uuid: contact.UUID}
+	}
+
 	return &MockMsg{
 		channel:              channel,
 		uuid:                 uuid,
@@ -160,11 +163,22 @@ func (mb *MockBackend) ClearMsgSent(ctx context.Context, uuid models.MsgUUID) er
 }
 
 // OnSendComplete marks the passed msg as having been dealt with
-func (mb *MockBackend) OnSendComplete(ctx context.Context, msg courier.MsgOut, s courier.StatusUpdate, clog *courier.ChannelLog, newURN urns.URN) {
+func (mb *MockBackend) OnSendComplete(ctx context.Context, msg courier.MsgOut, s courier.StatusUpdate, res *courier.SendResult, clog *courier.ChannelLog) {
 	mb.mutex.Lock()
 	defer mb.mutex.Unlock()
 
 	mb.sentMsgs[msg.UUID()] = true
+
+	// simulate queueing a contact_changed task by adding the new URN to the contacts map
+	if res != nil && res.NewURN() != urns.NilURN && !msg.Contact().HasOtherURN(res.NewURN()) {
+		for _, c := range mb.contacts {
+			mc := c.(*mockContact)
+			if mc.id == msg.Contact().ID {
+				mb.contacts[res.NewURN()] = c
+				break
+			}
+		}
+	}
 }
 
 func (mb *MockBackend) OnReceiveComplete(ctx context.Context, ch courier.Channel, events []courier.Event, clog *courier.ChannelLog) {
@@ -219,10 +233,10 @@ func (mb *MockBackend) NewStatusUpdate(channel courier.Channel, uuid models.MsgU
 // NewStatusUpdateByExternalID creates a new Status object for the given external id
 func (mb *MockBackend) NewStatusUpdateByExternalID(channel courier.Channel, externalID string, status models.MsgStatus, clog *courier.ChannelLog) courier.StatusUpdate {
 	return &MockStatusUpdate{
-		channel:    channel,
-		externalID: externalID,
-		status:     status,
-		createdOn:  time.Now().In(time.UTC),
+		channel:            channel,
+		externalIdentifier: externalID,
+		status:             status,
+		createdOn:          time.Now().In(time.UTC),
 	}
 }
 
@@ -288,25 +302,10 @@ func (mb *MockBackend) GetContact(ctx context.Context, channel courier.Channel, 
 			return nil, nil
 		}
 
-		contact = &mockContact{channel, urn, authTokens, models.ContactUUID(uuids.NewV4())}
+		contact = &mockContact{channel: channel, urn: urn, authTokens: authTokens, uuid: models.ContactUUID(uuids.NewV4())}
 		mb.contacts[urn] = contact
 	}
 	return contact, nil
-}
-
-// AddURNtoContact adds a URN to the passed in contact
-func (mb *MockBackend) AddURNtoContact(context context.Context, channel courier.Channel, contact courier.Contact, urn urns.URN, authTokens map[string]string) (urns.URN, error) {
-	mb.contacts[urn] = contact
-	return urn, nil
-}
-
-// RemoveURNFromcontact removes a URN from the passed in contact
-func (mb *MockBackend) RemoveURNfromContact(context context.Context, channel courier.Channel, contact courier.Contact, urn urns.URN) (urns.URN, error) {
-	_, found := mb.contacts[urn]
-	if found {
-		delete(mb.contacts, urn)
-	}
-	return urn, nil
 }
 
 // Start starts our mock backend
@@ -338,24 +337,6 @@ func (mb *MockBackend) ResolveMedia(ctx context.Context, mediaUrl string) (*mode
 	}
 
 	return media, nil
-}
-
-func (mb *MockBackend) Health() string {
-	return ""
-}
-
-// Health gives a string representing our health, empty for our mock
-func (mb *MockBackend) HttpClient(bool) *http.Client {
-	return http.DefaultClient
-}
-
-func (mb *MockBackend) HttpAccess() *httpx.AccessConfig {
-	return nil
-}
-
-// Status returns a string describing the status of the service, queue size etc..
-func (mb *MockBackend) Status() string {
-	return "ALL GOOD"
 }
 
 // RedisPool returns the redisPool for this backend

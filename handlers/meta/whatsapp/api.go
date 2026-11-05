@@ -1,10 +1,14 @@
 package whatsapp
 
 import (
+	"errors"
 	"fmt"
+	"log/slog"
+	"strconv"
+	"time"
 
-	"github.com/nyaruka/courier"
-	"github.com/nyaruka/courier/core/models"
+	"github.com/nyaruka/courier/v26"
+	"github.com/nyaruka/courier/v26/core/models"
 	"github.com/nyaruka/gocommon/urns"
 )
 
@@ -22,6 +26,10 @@ var IgnoreStatuses = map[string]bool{
 
 var WACThrottlingErrorCodes = []int{4, 80007, 130429, 131048, 131056, 133016}
 
+// WACRetryableErrorCodes are error codes for transient failures that should be retried rather than failed. 131053
+// is a media upload/download error which is often caused by Meta failing to fetch the media from the given link.
+var WACRetryableErrorCodes = []int{131053}
+
 // see https://developers.facebook.com/docs/whatsapp/cloud-api/reference/media#example-2
 type MOMedia struct {
 	Caption  string `json:"caption"`
@@ -31,105 +39,183 @@ type MOMedia struct {
 	SHA256   string `json:"sha256"`
 }
 
+type WAError struct {
+	Code  int    `json:"code"`
+	Title string `json:"title"`
+}
+
+func (e WAError) ErrorChannelLog(clog *courier.ChannelLog) {
+	clog.Error(courier.ErrorExternal(strconv.Itoa(e.Code), e.Title))
+}
+
+type WAContact struct {
+	Profile struct {
+		Name string `json:"name"`
+	} `json:"profile"`
+	WaID   string `json:"wa_id"`
+	UserID string `json:"user_id"`
+}
+
+type WAMessage struct {
+	ID         string `json:"id"`
+	GroupID    string `json:"group_id,omitempty"`
+	From       string `json:"from"`
+	FromUserID string `json:"from_user_id"`
+	Timestamp  string `json:"timestamp"`
+	Type       string `json:"type"`
+	Context    *struct {
+		Forwarded           bool   `json:"forwarded"`
+		FrequentlyForwarded bool   `json:"frequently_forwarded"`
+		From                string `json:"from"`
+		ID                  string `json:"id"`
+	} `json:"context"`
+	Text struct {
+		Body string `json:"body"`
+	} `json:"text"`
+	Image    *MOMedia `json:"image"`
+	Audio    *MOMedia `json:"audio"`
+	Video    *MOMedia `json:"video"`
+	Document *MOMedia `json:"document"`
+	Voice    *MOMedia `json:"voice"`
+	Location *struct {
+		Latitude  float64 `json:"latitude"`
+		Longitude float64 `json:"longitude"`
+		Name      string  `json:"name"`
+		Address   string  `json:"address"`
+	} `json:"location"`
+	Button *struct {
+		Text    string `json:"text"`
+		Payload string `json:"payload"`
+	} `json:"button"`
+	Interactive struct {
+		Type        string `json:"type"`
+		ButtonReply struct {
+			ID    string `json:"id"`
+			Title string `json:"title"`
+		} `json:"button_reply,omitempty"`
+		ListReply struct {
+			ID    string `json:"id"`
+			Title string `json:"title"`
+		} `json:"list_reply,omitempty"`
+	} `json:"interactive,omitempty"`
+	Errors []WAError `json:"errors"`
+}
+
+func (m WAMessage) ExtractData(clog *courier.ChannelLog) (time.Time, urns.URN, string, string, string, error, error) {
+	var err error
+	var finalErr error
+	var date time.Time
+	var urn urns.URN
+	var text string
+	var mediaURL string
+	var mediaID string
+
+	// create our date from the timestamp
+	ts, err := strconv.ParseInt(m.Timestamp, 10, 64)
+	if err != nil {
+		finalErr = fmt.Errorf("invalid timestamp: %s", m.Timestamp)
+		return date, urn, text, mediaURL, mediaID, err, finalErr
+	}
+	date = parseTimestamp(ts)
+
+	urn, err = urns.New(urns.WhatsApp, m.From)
+	if err != nil {
+		finalErr = errors.New("invalid whatsapp id")
+		return date, urn, text, mediaURL, mediaID, err, finalErr
+	}
+
+	for _, msgError := range m.Errors {
+		msgError.ErrorChannelLog(clog)
+	}
+
+	text, mediaURL, mediaID, err = m.ExtractTextAndMedia()
+
+	return date, urn, text, mediaURL, mediaID, err, finalErr
+}
+
+func parseTimestamp(ts int64) time.Time {
+	// sometimes Facebook sends timestamps in milliseconds rather than seconds
+	if ts >= 1_000_000_000_000 {
+		slog.Error("meta webhook timestamp is in milliseconds instead of seconds", "timestamp", ts)
+		return time.Unix(0, ts*1000000).UTC()
+	}
+	return time.Unix(ts, 0).UTC()
+}
+
+func (m WAMessage) ExtractTextAndMedia() (string, string, string, error) {
+	text := ""
+	mediaURL := ""
+	mediaID := ""
+	var err error
+
+	if m.Type == "text" {
+		text = m.Text.Body
+	} else if m.Type == "audio" && m.Audio != nil {
+		text = m.Audio.Caption
+		mediaID = m.Audio.ID
+	} else if m.Type == "voice" && m.Voice != nil {
+		text = m.Voice.Caption
+		mediaID = m.Voice.ID
+	} else if m.Type == "button" && m.Button != nil {
+		text = m.Button.Text
+	} else if m.Type == "document" && m.Document != nil {
+		text = m.Document.Caption
+		mediaID = m.Document.ID
+	} else if m.Type == "image" && m.Image != nil {
+		text = m.Image.Caption
+		mediaID = m.Image.ID
+	} else if m.Type == "video" && m.Video != nil {
+		text = m.Video.Caption
+		mediaID = m.Video.ID
+	} else if m.Type == "location" && m.Location != nil {
+		mediaURL = fmt.Sprintf("geo:%f,%f", m.Location.Latitude, m.Location.Longitude)
+	} else if m.Type == "interactive" && m.Interactive.Type == "button_reply" {
+		text = m.Interactive.ButtonReply.Title
+	} else if m.Type == "interactive" && m.Interactive.Type == "list_reply" {
+		text = m.Interactive.ListReply.Title
+	} else {
+		// we received a message type we do not support.
+		err = fmt.Errorf("unsupported message type %s", m.Type)
+	}
+
+	return text, mediaURL, mediaID, err
+
+}
+
+type WAStatus struct {
+	ID           string `json:"id"`
+	RecipientID  string `json:"recipient_id"`
+	Status       string `json:"status"`
+	Timestamp    string `json:"timestamp"`
+	Type         string `json:"type"`
+	Conversation *struct {
+		ID     string `json:"id"`
+		Origin *struct {
+			Type string `json:"type"`
+		} `json:"origin"`
+	} `json:"conversation"`
+	Pricing *struct {
+		PricingModel string `json:"pricing_model"`
+		Billable     bool   `json:"billable"`
+		Category     string `json:"category"`
+	} `json:"pricing"`
+	Errors []WAError `json:"errors"`
+}
+
+type WAMetadata struct {
+	DisplayPhoneNumber string `json:"display_phone_number"`
+	PhoneNumberID      string `json:"phone_number_id"`
+}
+
 type Change struct {
 	Field string `json:"field"`
 	Value struct {
-		MessagingProduct string `json:"messaging_product"`
-		Metadata         *struct {
-			DisplayPhoneNumber string `json:"display_phone_number"`
-			PhoneNumberID      string `json:"phone_number_id"`
-		} `json:"metadata"`
-			Contacts []struct {
-				Profile struct {
-					Name string `json:"name"`
-				} `json:"profile"`
-				WaID   string `json:"wa_id"`
-				UserID string `json:"user_id"`
-			} `json:"contacts"`
-			Messages []struct {
-				ID         string `json:"id"`
-				From       string `json:"from"`
-				FromUserID string `json:"from_user_id"`
-				Timestamp  string `json:"timestamp"`
-			Type      string `json:"type"`
-			Context   *struct {
-				Forwarded           bool   `json:"forwarded"`
-				FrequentlyForwarded bool   `json:"frequently_forwarded"`
-				From                string `json:"from"`
-				ID                  string `json:"id"`
-			} `json:"context"`
-			Text struct {
-				Body string `json:"body"`
-			} `json:"text"`
-			Image    *MOMedia `json:"image"`
-			Audio    *MOMedia `json:"audio"`
-			Video    *MOMedia `json:"video"`
-			Document *MOMedia `json:"document"`
-			Voice    *MOMedia `json:"voice"`
-			Location *struct {
-				Latitude  float64 `json:"latitude"`
-				Longitude float64 `json:"longitude"`
-				Name      string  `json:"name"`
-				Address   string  `json:"address"`
-			} `json:"location"`
-			Button *struct {
-				Text    string `json:"text"`
-				Payload string `json:"payload"`
-			} `json:"button"`
-			Interactive struct {
-				Type        string `json:"type"`
-				ButtonReply struct {
-					ID    string `json:"id"`
-					Title string `json:"title"`
-				} `json:"button_reply,omitempty"`
-				ListReply struct {
-					ID    string `json:"id"`
-					Title string `json:"title"`
-				} `json:"list_reply,omitempty"`
-			} `json:"interactive,omitempty"`
-			Contacts []struct {
-				Name struct {
-					FirstName     string `json:"first_name"`
-					LastName      string `json:"last_name"`
-					FormattedName string `json:"formatted_name"`
-				} `json:"name"`
-				Phones []struct {
-					Phone string `json:"phone"`
-					WaID  string `json:"wa_id"`
-					Type  string `json:"type"`
-				} `json:"phones"`
-			} `json:"contacts"`
-			Errors []struct {
-				Code  int    `json:"code"`
-				Title string `json:"title"`
-			} `json:"errors"`
-		} `json:"messages"`
-		Statuses []struct {
-			ID           string `json:"id"`
-			RecipientID  string `json:"recipient_id"`
-			Status       string `json:"status"`
-			Timestamp    string `json:"timestamp"`
-			Type         string `json:"type"`
-			Conversation *struct {
-				ID     string `json:"id"`
-				Origin *struct {
-					Type string `json:"type"`
-				} `json:"origin"`
-			} `json:"conversation"`
-			Pricing *struct {
-				PricingModel string `json:"pricing_model"`
-				Billable     bool   `json:"billable"`
-				Category     string `json:"category"`
-			} `json:"pricing"`
-			Errors []struct {
-				Code  int    `json:"code"`
-				Title string `json:"title"`
-			} `json:"errors"`
-		} `json:"statuses"`
-		Errors []struct {
-			Code  int    `json:"code"`
-			Title string `json:"title"`
-		} `json:"errors"`
+		MessagingProduct string      `json:"messaging_product"`
+		Metadata         *WAMetadata `json:"metadata"`
+		Contacts         []WAContact `json:"contacts"`
+		Messages         []WAMessage `json:"messages"`
+		Statuses         []WAStatus  `json:"statuses"`
+		Errors           []WAError   `json:"errors"`
 	} `json:"value"`
 }
 
@@ -161,12 +247,19 @@ type Button struct {
 }
 
 type Param struct {
-	Type     string `json:"type"`
-	Text     string `json:"text"`
-	Payload  string `json:"payload,omitempty"`
-	Image    *Media `json:"image,omitempty"`
-	Document *Media `json:"document,omitempty"`
-	Video    *Media `json:"video,omitempty"`
+	Type    string `json:"type"`
+	Text    string `json:"text,omitempty"`
+	Payload string `json:"payload,omitempty"`
+	Image   *struct {
+		Link string `json:"link,omitempty"`
+	} `json:"image,omitempty"`
+	Video *struct {
+		Link string `json:"link,omitempty"`
+	} `json:"video,omitempty"`
+	Document *struct {
+		Link     string `json:"link,omitempty"`
+		Filename string `json:"filename,omitempty"`
+	} `json:"document,omitempty"`
 }
 
 type Component struct {
@@ -212,6 +305,7 @@ type Interactive struct {
 		Text string `json:"text"`
 	} `json:"footer,omitempty"`
 	Action *struct {
+		Name     string    `json:"name,omitempty"`
 		Button   string    `json:"button,omitempty"`
 		Sections []Section `json:"sections,omitempty"`
 		Buttons  []Button  `json:"buttons,omitempty"`
@@ -223,8 +317,7 @@ type Interactive struct {
 type SendRequest struct {
 	MessagingProduct string `json:"messaging_product"`
 	RecipientType    string `json:"recipient_type"`
-	To               string `json:"to,omitempty"`
-	Recipient        string `json:"recipient,omitempty"`
+	To               string `json:"to"`
 	Type             string `json:"type"`
 
 	Text *Text `json:"text,omitempty"`
@@ -242,6 +335,10 @@ type SendRequest struct {
 // see https://developers.facebook.com/docs/whatsapp/cloud-api/guides/send-messages#response-syntax
 // e.g. https://developers.facebook.com/docs/whatsapp/cloud-api/reference/messages#successful-response
 type SendResponse struct {
+	Contacts []*struct {
+		WaID   string `json:"wa_id"`
+		UserID string `json:"user_id"`
+	} `json:"contacts"`
 	Messages []*struct {
 		ID string `json:"id"`
 	} `json:"messages"`
@@ -249,41 +346,12 @@ type SendResponse struct {
 		Message string `json:"message"`
 		Code    int    `json:"code"`
 	} `json:"error"`
-	Contacts []*struct {
-		Input  string `json:"input,omitempty"`
-		WaID   string `json:"wa_id,omitempty"`
-		UserID string `json:"user_id,omitempty"`
-	} `json:"contacts,omitempty"`
 }
 
-// Identifier returns From if present, otherwise FromUserID (WhatsApp BSUID when the phone is omitted).
-func Identifier(from, fromUserID string) string {
-	if from != "" {
-		return from
-	}
-	return fromUserID
-}
-
-// UserID returns the user_id from the first contact in the send response if present.
+// UserID returns the user_id from the first contact in the response if present.
 func (r *SendResponse) UserID() string {
-	if len(r.Contacts) > 0 && r.Contacts[0] != nil {
+	if len(r.Contacts) > 0 && r.Contacts[0].UserID != "" {
 		return r.Contacts[0].UserID
 	}
 	return ""
-}
-
-// AttachUserID appends a WhatsApp BSUID as a secondary URN on the incoming message when it is valid and
-// different from the primary URN. Malformed IDs are ignored (caller logs the error).
-func AttachUserID(event courier.MsgIn, primary urns.URN, userID string) error {
-	if userID == "" {
-		return nil
-	}
-	userIDURN, err := urns.New(urns.WhatsApp, userID)
-	if err != nil {
-		return fmt.Errorf("invalid user_id for whatsapp URN: %w", err)
-	}
-	if userIDURN != primary {
-		event.WithNewURN(userIDURN)
-	}
-	return nil
 }

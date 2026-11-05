@@ -1,46 +1,63 @@
 package testsuite
 
 import (
+	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/lib/pq"
-	"github.com/nyaruka/courier/core/models"
-	"github.com/nyaruka/courier/runtime"
+	"github.com/nyaruka/courier/v26/core/models"
+	"github.com/nyaruka/courier/v26/runtime"
 	"github.com/nyaruka/gocommon/urns"
 	"github.com/nyaruka/null/v3"
 	"github.com/stretchr/testify/require"
 )
 
+// QuickReplies is a slice of QuickReply that can be scanned from a nullable JSONB column.
+type QuickReplies []models.QuickReply
+
+func (qr *QuickReplies) Scan(value any) error {
+	if value == nil {
+		*qr = nil
+		return nil
+	}
+	b, ok := value.([]byte)
+	if !ok {
+		return fmt.Errorf("failed to scan quick replies: expected []byte, got %T", value)
+	}
+	return json.Unmarshal(b, qr)
+}
+
 type DBMsg struct {
-	OrgID        models.OrgID         `db:"org_id"`
-	ID           int64                `db:"id"`
-	UUID         models.MsgUUID       `db:"uuid"`
-	Direction    models.MsgDirection  `db:"direction"`
-	Status       models.MsgStatus     `db:"status"`
-	MsgType      string               `db:"msg_type"`
-	Visibility   models.MsgVisibility `db:"visibility"`
-	HighPriority bool                 `db:"high_priority"`
-	IsAndroid    bool                 `db:"is_android"`
-	Text         string               `db:"text"`
-	Attachments  pq.StringArray       `db:"attachments"`
-	QuickReplies pq.StringArray       `db:"quick_replies"`
-	Locale       null.String          `db:"locale"`
-	Templating   *models.Templating   `db:"templating"`
-	ExternalID   null.String          `db:"external_id"`
-	ChannelID    models.ChannelID     `db:"channel_id"`
-	ContactID    models.ContactID     `db:"contact_id"`
-	ContactURNID models.ContactURNID  `db:"contact_urn_id"`
-	MsgCount     int                  `db:"msg_count"`
-	CreatedByID  null.Int             `db:"created_by_id"`
-	CreatedOn    time.Time            `db:"created_on"`
-	ModifiedOn   time.Time            `db:"modified_on"`
-	SentOn       *time.Time           `db:"sent_on"`
-	ErrorCount   int                  `db:"error_count"`
-	FailedReason null.String          `db:"failed_reason"`
-	NextAttempt  *time.Time           `db:"next_attempt"`
-	OptInID      null.Int             `db:"optin_id"`
-	LogUUIDs     pq.StringArray       `db:"log_uuids"`
+	OrgID              models.OrgID         `db:"org_id"`
+	ID                 int64                `db:"id"`
+	UUID               models.MsgUUID       `db:"uuid"`
+	Direction          models.MsgDirection  `db:"direction"`
+	Status             models.MsgStatus     `db:"status"`
+	MsgType            string               `db:"msg_type"`
+	Visibility         models.MsgVisibility `db:"visibility"`
+	HighPriority       bool                 `db:"high_priority"`
+	IsAndroid          bool                 `db:"is_android"`
+	Text               string               `db:"text"`
+	Attachments        pq.StringArray       `db:"attachments"`
+	QuickReplies       QuickReplies         `db:"quickreplies"`
+	Locale             null.String          `db:"locale"`
+	Templating         *models.Templating   `db:"templating"`
+	ExternalIdentifier null.String          `db:"external_identifier"`
+	ChannelID          models.ChannelID     `db:"channel_id"`
+	ContactID          models.ContactID     `db:"contact_id"`
+	ContactURNID       models.ContactURNID  `db:"contact_urn_id"`
+	MsgCount           int                  `db:"msg_count"`
+	CreatedByID        null.Int             `db:"created_by_id"`
+	CreatedOn          time.Time            `db:"created_on"`
+	ModifiedOn         time.Time            `db:"modified_on"`
+	SentOn             *time.Time           `db:"sent_on"`
+	ErrorCount         int                  `db:"error_count"`
+	FailedReason       null.String          `db:"failed_reason"`
+	NextAttempt        *time.Time           `db:"next_attempt"`
+	OptInID            null.Int             `db:"optin_id"`
+	LogUUIDs           pq.StringArray       `db:"log_uuids"`
 }
 
 func ReadDBMsg(t *testing.T, rt *runtime.Runtime, uuid models.MsgUUID) *DBMsg {

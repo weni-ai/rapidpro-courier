@@ -3,7 +3,7 @@ package courier
 import (
 	"time"
 
-	"github.com/nyaruka/courier/core/models"
+	"github.com/nyaruka/courier/v26/core/models"
 	"github.com/nyaruka/gocommon/i18n"
 	"github.com/nyaruka/gocommon/urns"
 	"github.com/nyaruka/gocommon/uuids"
@@ -83,7 +83,7 @@ type MsgIn interface {
 	WithContactName(name string) MsgIn
 	WithURNAuthTokens(tokens map[string]string) MsgIn
 	WithReceivedOn(date time.Time) MsgIn
-	WithNewURN(urn urns.URN) MsgIn
+	WithNewURN(urn urns.URN, action models.NewURNAction) MsgIn
 }
 
 // StatusUpdate represents a status update on a message
@@ -93,11 +93,8 @@ type StatusUpdate interface {
 	ChannelUUID() models.ChannelUUID
 	MsgUUID() models.MsgUUID
 
-	SetURNUpdate(old, new urns.URN) error
-	URNUpdate() (old, new urns.URN)
-
-	ExternalID() string
-	SetExternalID(string)
+	ExternalIdentifier() string
+	SetExternalIdentifier(string)
 
 	Status() models.MsgStatus
 	SetStatus(models.MsgStatus)
@@ -112,7 +109,6 @@ type ChannelEvent interface {
 	URN() urns.URN
 	EventType() models.ChannelEventType
 	Extra() map[string]string
-	CreatedOn() time.Time
 	OccurredOn() time.Time
 
 	WithContactName(name string) ChannelEvent

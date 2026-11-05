@@ -1,3 +1,250 @@
+v26.2.1 (2026-06-16)
+-------------------------
+ * Retry WhatsApp Cloud media upload errors (131053) instead of failing them
+
+v26.2.0 (2026-06-15)
+-------------------------
+ * Update dependencies
+ * Handle throttling and bare-message errors consistently across WhatsApp Cloud send paths
+
+v26.1.48 (2026-06-04)
+-------------------------
+ * Update to gocommon v1.83.0
+
+v26.1.47 (2026-06-04)
+-------------------------
+ * Update to gocommon v1.82.0 (phonenumbers v2)
+
+v26.1.46 (2026-06-03)
+-------------------------
+ * Update gocommon to v1.81.1 and adopt httpx transport middleware
+
+v26.1.45 (2026-06-02)
+-------------------------
+ * Merge pull request #1030 from nyaruka/fix-kannel-omit-charset
+ * Don't send charset param for kannel unicode - body is already UTF-16BE
+ * Revert "Don't send charset param for kannel unicode - body is already UTF-16BE"
+ * Don't send charset param for kannel unicode - body is already UTF-16BE
+
+v26.1.44 (2026-06-02)
+-------------------------
+ * Merge pull request #1029 from nyaruka/fix-kannel-unicode-charset
+ * Send kannel unicode messages as UTF-16BE to avoid charset recode errors
+
+v26.1.43 (2026-06-02)
+-------------------------
+ * Merge pull request #1028 from nyaruka/fix-charset-KN
+ * Fix kannel charset parameter
+ * Only run code review when PR is opened
+
+v26.1.42 (2026-06-01)
+-------------------------
+ * Update phonenumbers to v1.8.0
+
+v26.1.41 (2026-05-26)
+-------------------------
+ * Update default cloudwatch namespace to Courier
+ * Route external channel send URLs through optional outbound HTTP proxy
+
+v26.1.40 (2026-05-25)
+-------------------------
+ * Update gocommon to v1.80.1
+ * Fix DisallowedNetworks defaults blocking all outgoing IPv4 traffic
+
+v26.1.39 (2026-05-25)
+-------------------------
+ * Expand default DisallowedNetworks (full loopback, IPv4-mapped IPv6, ULA, CGNAT, and more)
+
+v26.1.38 (2026-05-25)
+-------------------------
+ * Update dependencies
+ * Remove SQ (shaqodoon) channel type
+ * Trim handler User-Agent to avoid leaking build details
+ * Remove BL (bongolive) channel type
+ * Remove KN insecure HTTP requests
+
+v26.1.37 (2026-05-19)
+-------------------------
+ * Serve health response at / on both listeners
+
+v26.1.36 (2026-05-19)
+-------------------------
+ * Remove index and status endpoints from public listener
+
+v26.1.35 (2026-05-18)
+-------------------------
+ * Remove backward-compat /ci/ route from public listener
+
+v26.1.34 (2026-05-18)
+-------------------------
+ * Remove old test channel handler
+
+v26.1.33 (2026-05-18)
+-------------------------
+ * Expose internal endpoint on separate listener port, add /ping
+
+v26.1.32 (2026-05-14)
+-------------------------
+ * Remove plaintext HTTP webhook logging
+
+v26.1.31 (2026-05-13)
+-------------------------
+ * Log warning when /c/* webhook arrives over plaintext HTTP
+
+v26.1.30 (2026-05-12)
+-------------------------
+ * Drop deprecated /c/_fetch-attachment endpoint
+
+v26.1.29 (2026-05-11)
+-------------------------
+ * Properly support BSUID for TRN channels
+
+v26.1.28 (2026-05-07)
+-------------------------
+ * Don't count duplicated messages for incoming message metrics
+
+v26.1.27 (2026-04-28)
+-------------------------
+ * Update dependencies
+ * Sort WhatsApp template component variables numerically
+
+v26.1.26 (2026-04-23)
+-------------------------
+ * Save BSUID URN for TRN channels on incoming messages
+ * Support receiving for BSUID on Twilio Whatsapp
+
+v26.1.25 (2026-04-16)
+-------------------------
+ * Merge pull request #999 from nyaruka/d3c-bsuid
+ * Save BSUID URN for D3C channels
+
+v26.1.24 (2026-04-08)
+-------------------------
+ * Update dependencies
+
+v26.1.23 (2026-04-07)
+-------------------------
+ * Include channel_id in contact_changed tasks
+
+v26.1.22 (2026-04-07)
+-------------------------
+ * Use NamedExecContext for incoming msg and channel event inserts
+ * Move incoming message insert into core/models
+ * Move ChannelEvent struct and insert into core/models
+
+v26.1.21 (2026-04-02)
+-------------------------
+ * Skip queuing contact_changed task when contact already has the URN
+ * Add BSUID URN support for outgoing WhatsApp messages
+
+v26.1.20 (2026-04-01)
+-------------------------
+ * Update to latest phonenumbers
+ * Support WhatsApp user_id as secondary URN using BSUID scheme
+
+v26.1.19 (2026-03-31)
+-------------------------
+ * Fix goreleaser
+
+v26.1.18 (2026-03-31)
+-------------------------
+ * Remove channel log policy feature so all channel logs are always persisted
+ * Add new_urn support to incoming messages for mailroom msg_received task
+ * Bump valkey from 8.0 to 8.1 in CI
+ * Bump github.com/antchfx/xpath from 1.3.5 to 1.3.6
+ * Bump github.com/buger/jsonparser from 1.1.1 to 1.1.2
+ * Update from Go 1.25 to 1.26
+
+v26.1.17 (2026-03-23)
+-------------------------
+ * Remove support for Facebook referral URNs, no longer used
+
+v26.1.16 (2026-03-11)
+-------------------------
+ * Make whatsapp legacy handler a noop
+
+v26.1.15 (2026-03-10)
+-------------------------
+ * Defer to mailroom to set URN affinity
+
+v26.1.14 (2026-03-04)
+-------------------------
+ * Merge pull request #975 from nyaruka/allow-AT-config-send-url
+ * Allow using configured URL for AT channels
+ * Dev reorg
+
+v26.1.13 (2026-02-19)
+-------------------------
+ * Merge pull request #974 from nyaruka/adjust-JS-status-handler
+ * Fix JS encoding to use UTF16 encoder
+ * Apply suggestions from code review
+ * Adjust JS status handler to use message status values
+ * Update dependencies
+ * Add CLAUDE.md
+ * Tweak devcontainer configuration
+
+v26.1.12 (2026-02-18)
+-------------------------
+ * Add support for sending unicode text for JS channel as hex-content parameter
+
+v26.1.11 (2026-02-12)
+-------------------------
+ * Remove log for timestamp from meta FBA and IG
+
+v26.1.10 (2026-02-11)
+-------------------------
+ * Support location request quick replies for Viber and LINE
+ * Update phonenumbers
+ * Make processing incoming Whatsapp messages more dry
+
+v26.1.9 (2026-02-04)
+-------------------------
+ * Make telegram location handling same as whatsapp
+
+v26.1.8 (2026-02-04)
+-------------------------
+ * Fix to always set text for request location keyboard button
+
+v26.1.7 (2026-02-04)
+-------------------------
+ * Support sending location requests for WhatsApp and Telegram channels
+
+v26.1.6 (2026-02-04)
+-------------------------
+ * Add type to quick replies
+ * Ignore group message for whatsapp channels
+
+v26.1.5 (2026-01-20)
+-------------------------
+ * Resolve by external_identifier for status updates
+
+v26.1.4 (2026-01-13)
+-------------------------
+ * Remove ChannelEvent.created_on field
+
+v26.1.3 (2026-01-13)
+-------------------------
+ * Support updating the external_identifier field for outgoing messages and support for deleting by that field
+
+v26.1.2 (2026-01-12)
+-------------------------
+ * Start writing external identifier field for incoming messages
+
+v26.1.1 (2026-01-08)
+-------------------------
+ * Update phonenumbers dependency
+ * Add warning for incoming messages unique constraint violation
+
+v26.1.0 (2026-01-07)
+-------------------------
+ * Ignore 'null' external IDs on hormuud channels
+ * Test against valkey 8 and postgresql 17
+
+v26.0.1 (2026-01-05)
+-------------------------
+ * Update dependencies
+ * Update to a recent FB graph API version
+
 v26.0.0 (2026-01-05)
 -------------------------
  * Add devcontainer configuration

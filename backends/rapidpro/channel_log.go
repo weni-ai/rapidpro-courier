@@ -5,9 +5,9 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/nyaruka/courier"
-	"github.com/nyaruka/courier/core/models"
-	"github.com/nyaruka/courier/utils/clogs"
+	"github.com/nyaruka/courier/v26"
+	"github.com/nyaruka/courier/v26/core/models"
+	"github.com/nyaruka/courier/v26/utils/clogs"
 	"github.com/nyaruka/gocommon/aws/dynamo"
 	"github.com/nyaruka/gocommon/httpx"
 )
@@ -57,13 +57,6 @@ func (l *ChannelLog) MarshalDynamo() (*dynamo.Item, error) {
 // queues the passed in channel log to a writer
 func queueChannelLog(b *backend, clog *courier.ChannelLog) {
 	log := slog.With("log_uuid", clog.UUID, "log_type", clog.Type, "channel_uuid", clog.Channel().UUID())
-	dbChan := clog.Channel().(*models.Channel)
-	isError := clog.IsError()
-
-	// depending on the channel log policy, we might be able to discard this log
-	if dbChan.LogPolicy == models.LogPolicyNone || (dbChan.LogPolicy == models.LogPolicyErrors && !isError) {
-		return
-	}
 
 	capacity, err := b.rt.Writers.Main.Queue(&ChannelLog{clog})
 	if err != nil {

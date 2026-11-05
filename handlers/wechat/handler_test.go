@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"io"
 	"log"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -15,11 +14,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nyaruka/courier"
-	"github.com/nyaruka/courier/core/models"
-	. "github.com/nyaruka/courier/handlers"
-	"github.com/nyaruka/courier/runtime"
-	"github.com/nyaruka/courier/test"
+	"github.com/nyaruka/courier/v26"
+	"github.com/nyaruka/courier/v26/core/models"
+	. "github.com/nyaruka/courier/v26/handlers"
+	"github.com/nyaruka/courier/v26/runtime"
+	"github.com/nyaruka/courier/v26/test"
 	"github.com/nyaruka/gocommon/httpx"
 	"github.com/nyaruka/gocommon/urns"
 	"github.com/stretchr/testify/assert"
@@ -210,14 +209,13 @@ func buildMockWCAPI(testCases []IncomingTestCase) *httptest.Server {
 	return server
 }
 
-func newServer(backend courier.Backend) courier.Server {
+func newServer(backend courier.Backend) *courier.Server {
 	// for benchmarks, log to null
-	logger := slog.Default()
 	log.SetOutput(io.Discard)
 	cfg := runtime.NewDefaultConfig()
 	cfg.DB = "postgres://courier_test:temba@postgres:5432/courier_test?sslmode=disable"
 	cfg.Valkey = "valkey://valkey:6379/0"
-	return courier.NewServerWithLogger(cfg, backend, logger)
+	return courier.NewServer(runtime.NewTestRuntime(cfg), backend)
 }
 
 func TestDescribeURN(t *testing.T) {
@@ -258,25 +256,23 @@ func TestBuildAttachmentRequest(t *testing.T) {
 	// reset send URL
 	sendURL = "https://api.weixin.qq.com/cgi-bin"
 
-	defer httpx.SetRequestor(httpx.DefaultRequestor)
-	httpx.SetRequestor(httpx.NewMockRequestor(map[string][]*httpx.MockResponse{
-		"https://api.weixin.qq.com/cgi-bin/token?appid=app-id&grant_type=client_credential&secret=app-secret123": {
-			httpx.NewMockResponse(http.StatusOK, nil, []byte(`{"access_token": "SESAME"}`)),
-		},
-	}))
-
 	// ensure that we start with no cached token
 	rc := mb.RedisPool().Get()
 	defer rc.Close()
 	rc.Do("DEL", "channel-token:8eb23e93-5ecb-45ba-b726-3b064e0c56ab")
 
 	s := newServer(mb)
+	s.Runtime().HTTP.Transport = httpx.WithMocks(nil, map[string][]*httpx.MockResponse{
+		"https://api.weixin.qq.com/cgi-bin/token?appid=app-id&grant_type=client_credential&secret=app-secret123": {
+			httpx.NewMockResponse(http.StatusOK, nil, []byte(`{"access_token": "SESAME"}`)),
+		},
+	})
 	handler := newHandler().(*handler)
 	handler.Initialize(s)
 	clog := courier.NewChannelLog(courier.ChannelLogTypeUnknown, testChannels[0], handler.RedactValues(testChannels[0]))
 
 	// check that request has the fetched access token
-	req, err := handler.BuildAttachmentRequest(context.Background(), mb, testChannels[0], "https://api.weixin.qq.com/cgi-bin/media/download.action?media_id=12", clog)
+	req, err := handler.BuildAttachmentRequest(context.Background(), testChannels[0], "https://api.weixin.qq.com/cgi-bin/media/download.action?media_id=12", clog)
 	assert.NoError(t, err)
 	assert.Equal(t, "https://api.weixin.qq.com/cgi-bin/media/download.action?access_token=SESAME&media_id=12", req.URL.String())
 
@@ -285,7 +281,7 @@ func TestBuildAttachmentRequest(t *testing.T) {
 	assert.Equal(t, "https://api.weixin.qq.com/cgi-bin/token?appid=app-id&grant_type=client_credential&secret=**********", clog.HttpLogs[0].URL)
 
 	// check that another request reads token from cache
-	req, err = handler.BuildAttachmentRequest(context.Background(), mb, testChannels[0], "https://api.weixin.qq.com/cgi-bin/media/download.action?media_id=13", clog)
+	req, err = handler.BuildAttachmentRequest(context.Background(), testChannels[0], "https://api.weixin.qq.com/cgi-bin/media/download.action?media_id=13", clog)
 	assert.NoError(t, err)
 	assert.Equal(t, "https://api.weixin.qq.com/cgi-bin/media/download.action?access_token=SESAME&media_id=13", req.URL.String())
 	assert.Len(t, clog.HttpLogs, 1)

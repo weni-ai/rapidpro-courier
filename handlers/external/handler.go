@@ -13,9 +13,9 @@ import (
 	"time"
 
 	"github.com/antchfx/xmlquery"
-	"github.com/nyaruka/courier"
-	"github.com/nyaruka/courier/core/models"
-	"github.com/nyaruka/courier/handlers"
+	"github.com/nyaruka/courier/v26"
+	"github.com/nyaruka/courier/v26/core/models"
+	"github.com/nyaruka/courier/v26/handlers"
 	"github.com/nyaruka/gocommon/gsm7"
 	"github.com/nyaruka/gocommon/jsonx"
 	"github.com/nyaruka/gocommon/urns"
@@ -66,7 +66,7 @@ func newHandler() courier.ChannelHandler {
 }
 
 // Initialize is called by the engine once everything is loaded
-func (h *handler) Initialize(s courier.Server) error {
+func (h *handler) Initialize(s *courier.Server) error {
 	h.SetServer(s)
 	s.AddHandlerRoute(h, http.MethodPost, "receive", courier.ChannelLogTypeMsgReceive, h.receiveMessage)
 	s.AddHandlerRoute(h, http.MethodGet, "receive", courier.ChannelLogTypeMsgReceive, h.receiveMessage)
@@ -379,7 +379,7 @@ func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.Sen
 			req.Header.Set(hKey, fmt.Sprint(hValue))
 		}
 
-		resp, respBody, err := h.RequestHTTP(req, clog)
+		resp, respBody, err := h.RequestHTTPProxied(req, clog)
 		if err != nil || resp.StatusCode/100 == 5 {
 			return courier.ErrConnectionFailed
 		} else if resp.StatusCode/100 != 2 {
@@ -403,6 +403,9 @@ func buildQuickRepliesResponse(quickReplies []models.QuickReply, sendMethod stri
 	if quickReplies == nil {
 		quickReplies = []models.QuickReply{}
 	}
+
+	quickReplies = handlers.FilterQuickRepliesByType(quickReplies, "text")
+
 	if (sendMethod == http.MethodPost || sendMethod == http.MethodPut) && contentType == contentJSON {
 		return string(jsonx.MustMarshal(handlers.TextOnlyQuickReplies(quickReplies)))
 	} else if (sendMethod == http.MethodPost || sendMethod == http.MethodPut) && contentType == contentXML {

@@ -2,6 +2,7 @@ package turn
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -17,11 +18,11 @@ import (
 
 	"github.com/buger/jsonparser"
 	"github.com/gomodule/redigo/redis"
-	"github.com/nyaruka/courier"
-	"github.com/nyaruka/courier/core/models"
-	"github.com/nyaruka/courier/handlers"
-	"github.com/nyaruka/courier/handlers/meta/whatsapp"
-	"github.com/nyaruka/courier/utils"
+	"github.com/nyaruka/courier/v26"
+	"github.com/nyaruka/courier/v26/core/models"
+	"github.com/nyaruka/courier/v26/handlers"
+	"github.com/nyaruka/courier/v26/handlers/meta/whatsapp"
+	"github.com/nyaruka/courier/v26/utils"
 	"github.com/nyaruka/gocommon/httpx"
 	"github.com/nyaruka/gocommon/i18n"
 	"github.com/nyaruka/gocommon/jsonx"
@@ -54,7 +55,7 @@ func newHandler() courier.ChannelHandler {
 }
 
 // Initialize is called by the engine once everything is loaded
-func (h *handler) Initialize(s courier.Server) error {
+func (h *handler) Initialize(s *courier.Server) error {
 	h.SetServer(s)
 	s.AddHandlerRoute(h, http.MethodPost, "receive", courier.ChannelLogTypeMultiReceive, handlers.JSONPayload(h, h.receiveEvents))
 
@@ -83,13 +84,13 @@ type eventsPayload struct {
 		Profile struct {
 			Name string `json:"name"`
 		} `json:"profile"`
-		WaID   string `json:"wa_id"`
-		UserID string `json:"user_id"`
+		WaID string `json:"wa_id"`
 	} `json:"contacts"`
 	Messages []struct {
-		From      string `json:"from"`
+		From      string `json:"from"      validate:"required"`
 		FromBSUID string `json:"from_bsuid"`
 		ID        string `json:"id"        validate:"required"`
+		GroupID   string `json:"group_id,omitempty"`
 		Timestamp string `json:"timestamp" validate:"required"`
 		Type      string `json:"type"      validate:"required"`
 		Text      struct {
@@ -175,17 +176,17 @@ func (h *handler) receiveEvents(ctx context.Context, channel courier.Channel, w 
 
 	var contactNames = make(map[string]string)
 	for _, contact := range payload.Contacts {
-		if contact.WaID != "" {
-			contactNames[contact.WaID] = contact.Profile.Name
-		}
-		if contact.UserID != "" {
-			contactNames[contact.UserID] = contact.Profile.Name
-		}
+		contactNames[contact.WaID] = contact.Profile.Name
 	}
 
 	// first deal with any received messages
 	for _, msg := range payload.Messages {
 		if seenMsgIDs[msg.ID] {
+			continue
+		}
+
+		if msg.GroupID != "" {
+			data = append(data, courier.NewInfoData("ignoring group message"))
 			continue
 		}
 
@@ -197,11 +198,7 @@ func (h *handler) receiveEvents(ctx context.Context, channel courier.Channel, w 
 		date := time.Unix(ts, 0).UTC()
 
 		// create our URN
-		sender := msg.From
-		if sender == "" {
-			sender = msg.FromBSUID
-		}
-		urn, err := urns.New(urns.WhatsApp, sender)
+		urn, err := urns.New(urns.WhatsApp, msg.From)
 		if err != nil {
 			return nil, handlers.WriteAndLogRequestError(ctx, h, channel, w, r, errors.New("invalid whatsapp id"))
 		}
@@ -239,10 +236,7 @@ func (h *handler) receiveEvents(ctx context.Context, channel courier.Channel, w 
 		}
 
 		// create our message
-		event := h.Backend().NewIncomingMsg(ctx, channel, urn, text, msg.ID, clog).WithReceivedOn(date).WithContactName(contactNames[sender])
-		if urnErr := whatsapp.AttachUserID(event, urn, msg.FromBSUID); urnErr != nil {
-			courier.LogRequestError(r, channel, urnErr)
-		}
+		event := h.Backend().NewIncomingMsg(ctx, channel, urn, text, msg.ID, clog).WithReceivedOn(date).WithContactName(contactNames[msg.From])
 
 		// we had an error downloading media
 		if err != nil {
@@ -251,6 +245,15 @@ func (h *handler) receiveEvents(ctx context.Context, channel courier.Channel, w 
 
 		if mediaURL != "" {
 			event.WithAttachment(mediaURL)
+		}
+
+		if msg.FromBSUID != "" {
+			userIDURN, urnErr := urns.New(urns.BSUID, msg.FromBSUID)
+			if urnErr == nil {
+				event.WithNewURN(userIDURN, models.NewURNAppend)
+			} else {
+				courier.LogRequestError(r, channel, fmt.Errorf("invalid from_bsuid for BSUID URN: %w", urnErr))
+			}
 		}
 
 		err = h.Backend().WriteMsg(ctx, event, clog)
@@ -309,7 +312,7 @@ func resolveMediaURL(channel courier.Channel, mediaID string) (string, error) {
 }
 
 // BuildAttachmentRequest to download media for message attachment with Bearer token set
-func (h *handler) BuildAttachmentRequest(ctx context.Context, b courier.Backend, channel courier.Channel, attachmentURL string, clog *courier.ChannelLog) (*http.Request, error) {
+func (h *handler) BuildAttachmentRequest(ctx context.Context, channel courier.Channel, attachmentURL string, clog *courier.ChannelLog) (*http.Request, error) {
 	token := channel.StringConfigForKey(models.ConfigAuthToken, "")
 	if token == "" {
 		return nil, fmt.Errorf("missing token for TRN channel")
@@ -359,19 +362,8 @@ var turnWaIgnoreStatuses = map[string]bool{
 //   }
 // }
 
-// recipient identifies the message recipient - either a phone number (to) or a business-scoped user ID (recipient)
-type recipient struct {
-	To        string `json:"to,omitempty"`
-	Recipient string `json:"recipient,omitempty"`
-}
-
-func newRecipient(msg courier.MsgOut) recipient {
-	to, rcpt := whatsapp.RecipientFields(msg.URN())
-	return recipient{To: to, Recipient: rcpt}
-}
-
 type mtTextPayload struct {
-	recipient
+	To         string `json:"to"    validate:"required"`
 	Type       string `json:"type"  validate:"required"`
 	PreviewURL bool   `json:"preview_url,omitempty"`
 	Text       struct {
@@ -380,7 +372,7 @@ type mtTextPayload struct {
 }
 
 type mtInteractivePayload struct {
-	recipient
+	To          string `json:"to" validate:"required"`
 	Type        string `json:"type" validate:"required"`
 	Interactive struct {
 		Type   string `json:"type" validate:"required"` //"text" | "image" | "video" | "document"
@@ -398,6 +390,7 @@ type mtInteractivePayload struct {
 			Text string `json:"text"`
 		} `json:"footer,omitempty"`
 		Action struct {
+			Name     string      `json:"name,omitempty"`
 			Button   string      `json:"button,omitempty"`
 			Sections []mtSection `json:"sections,omitempty"`
 			Buttons  []mtButton  `json:"buttons,omitempty"`
@@ -446,7 +439,7 @@ type Component struct {
 }
 
 type templatePayload struct {
-	recipient
+	To       string `json:"to"`
 	Type     string `json:"type"`
 	Template struct {
 		Namespace string `json:"namespace"`
@@ -460,25 +453,25 @@ type templatePayload struct {
 }
 
 type mtAudioPayload struct {
-	recipient
+	To    string       `json:"to"    validate:"required"`
 	Type  string       `json:"type"  validate:"required"`
 	Audio *mediaObject `json:"audio"`
 }
 
 type mtDocumentPayload struct {
-	recipient
+	To       string       `json:"to"    validate:"required"`
 	Type     string       `json:"type"  validate:"required"`
 	Document *mediaObject `json:"document"`
 }
 
 type mtImagePayload struct {
-	recipient
+	To    string       `json:"to"    validate:"required"`
 	Type  string       `json:"type"  validate:"required"`
 	Image *mediaObject `json:"image"`
 }
 
 type mtVideoPayload struct {
-	recipient
+	To    string       `json:"to" validate:"required"`
 	Type  string       `json:"type" validate:"required"`
 	Video *mediaObject `json:"video"`
 }
@@ -486,18 +479,20 @@ type mtVideoPayload struct {
 func buildPayloads(ctx context.Context, msg courier.MsgOut, h *handler, clog *courier.ChannelLog) ([]any, error) {
 	var payloads []any
 	var err error
-	rcpt := newRecipient(msg)
 
 	parts := handlers.SplitMsgByChannel(msg.Channel(), msg.Text(), maxMsgLength)
 
-	qrs := msg.QuickReplies()
+	qrs := handlers.FilterQuickRepliesByType(msg.QuickReplies(), "text")
 	qrsAsList := false
 	for i, qr := range qrs {
 		if i > 2 || qr.Extra != "" {
 			qrsAsList = true
 		}
 	}
-	isInteractiveMsg := len(qrs) > 0
+
+	locationQRs := handlers.FilterQuickRepliesByType(msg.QuickReplies(), "location")
+
+	isInteractiveMsg := len(msg.QuickReplies()) > 0
 
 	textAsCaption := false
 
@@ -516,15 +511,15 @@ func buildPayloads(ctx context.Context, msg courier.MsgOut, h *handler, clog *co
 			mediaPayload := &mediaObject{ID: mediaID, Link: mediaURL}
 			if strings.HasPrefix(mimeType, "audio") {
 				payload := mtAudioPayload{
-					recipient: rcpt,
-					Type:      "audio",
+					To:   msg.URN().Path(),
+					Type: "audio",
 				}
 				payload.Audio = mediaPayload
 				payloads = append(payloads, payload)
 			} else if strings.HasPrefix(mimeType, "application") || strings.HasPrefix(mimeType, "document") {
 				payload := mtDocumentPayload{
-					recipient: rcpt,
-					Type:      "document",
+					To:   msg.URN().Path(),
+					Type: "document",
 				}
 				if attachmentCount == 0 && !isInteractiveMsg {
 					mediaPayload.Caption = msg.Text()
@@ -540,8 +535,8 @@ func buildPayloads(ctx context.Context, msg courier.MsgOut, h *handler, clog *co
 				payloads = append(payloads, payload)
 			} else if strings.HasPrefix(mimeType, "image") {
 				payload := mtImagePayload{
-					recipient: rcpt,
-					Type:      "image",
+					To:   msg.URN().Path(),
+					Type: "image",
 				}
 				if attachmentCount == 0 && !isInteractiveMsg {
 					mediaPayload.Caption = msg.Text()
@@ -551,8 +546,8 @@ func buildPayloads(ctx context.Context, msg courier.MsgOut, h *handler, clog *co
 				payloads = append(payloads, payload)
 			} else if strings.HasPrefix(mimeType, "video") {
 				payload := mtVideoPayload{
-					recipient: rcpt,
-					Type:      "video",
+					To:   msg.URN().Path(),
+					Type: "video",
 				}
 				if attachmentCount == 0 && !isInteractiveMsg {
 					mediaPayload.Caption = msg.Text()
@@ -573,14 +568,14 @@ func buildPayloads(ctx context.Context, msg courier.MsgOut, h *handler, clog *co
 				var payload mtTextPayload
 				if strings.Contains(part, "https://") || strings.Contains(part, "http://") {
 					payload = mtTextPayload{
-						recipient:  rcpt,
+						To:         msg.URN().Path(),
 						Type:       "text",
 						PreviewURL: true,
 					}
 				} else {
 					payload = mtTextPayload{
-						recipient: rcpt,
-						Type:      "text",
+						To:   msg.URN().Path(),
+						Type: "text",
 					}
 				}
 				payload.Text.Body = part
@@ -592,20 +587,25 @@ func buildPayloads(ctx context.Context, msg courier.MsgOut, h *handler, clog *co
 			for i, part := range parts {
 				if i < (len(parts) - 1) { //if split into more than one message, the first parts will be text and the last interactive
 					payload := mtTextPayload{
-						recipient: rcpt,
-						Type:      "text",
+						To:   msg.URN().Path(),
+						Type: "text",
 					}
 					payload.Text.Body = part
 					payloads = append(payloads, payload)
 
 				} else {
 					payload := mtInteractivePayload{
-						recipient: rcpt,
-						Type:      "interactive",
+						To:   msg.URN().Path(),
+						Type: "interactive",
 					}
 
-					// we show buttons
-					if !qrsAsList {
+					if len(locationQRs) > 0 {
+						payload.Interactive.Type = "location_request_message"
+						payload.Interactive.Body.Text = part
+						payload.Interactive.Action.Name = "send_location"
+						payloads = append(payloads, payload)
+
+					} else if !qrsAsList { // we show buttons
 						payload.Interactive.Type = "button"
 						payload.Interactive.Body.Text = part
 						btns := make([]mtButton, len(qrs))
@@ -644,10 +644,7 @@ func buildPayloads(ctx context.Context, msg courier.MsgOut, h *handler, clog *co
 	} else {
 		// do we have a template?
 		if msg.Templating() != nil {
-			langCode := msg.Templating().Language
-			if langCode == "" {
-				langCode = getSupportedLanguage(msg.Locale())
-			}
+			langCode := getSupportedLanguage(msg.Locale())
 			namespace := msg.Templating().Namespace
 			if namespace == "" {
 				namespace = msg.Channel().StringConfigForKey(configNamespace, "")
@@ -657,8 +654,8 @@ func buildPayloads(ctx context.Context, msg courier.MsgOut, h *handler, clog *co
 			}
 
 			payload := templatePayload{
-				recipient: rcpt,
-				Type:      "template",
+				To:   msg.URN().Path(),
+				Type: "template",
 			}
 			payload.Template.Namespace = namespace
 			payload.Template.Name = msg.Templating().Template.Name
@@ -669,7 +666,11 @@ func buildPayloads(ctx context.Context, msg courier.MsgOut, h *handler, clog *co
 				// get the variables used by this component in order of their names 1, 2 etc
 				compParams := make([]models.TemplatingVariable, 0, len(comp.Variables))
 
-				for _, varName := range slices.Sorted(maps.Keys(comp.Variables)) {
+				for _, varName := range slices.SortedFunc(maps.Keys(comp.Variables), func(a, b string) int {
+					ai, _ := strconv.Atoi(a)
+					bi, _ := strconv.Atoi(b)
+					return cmp.Compare(ai, bi)
+				}) {
 					compParams = append(compParams, msg.Templating().Variables[comp.Variables[varName]])
 				}
 
@@ -692,20 +693,25 @@ func buildPayloads(ctx context.Context, msg courier.MsgOut, h *handler, clog *co
 				for i, part := range parts {
 					if i < (len(parts) - 1) { //if split into more than one message, the first parts will be text and the last interactive
 						payload := mtTextPayload{
-							recipient: rcpt,
-							Type:      "text",
+							To:   msg.URN().Path(),
+							Type: "text",
 						}
 						payload.Text.Body = part
 						payloads = append(payloads, payload)
 
 					} else {
 						payload := mtInteractivePayload{
-							recipient: rcpt,
-							Type:      "interactive",
+							To:   msg.URN().Path(),
+							Type: "interactive",
 						}
 
-						// we show buttons
-						if !qrsAsList {
+						if len(locationQRs) > 0 {
+							payload.Interactive.Type = "location_request_message"
+							payload.Interactive.Body.Text = part
+							payload.Interactive.Action.Name = "send_location"
+							payloads = append(payloads, payload)
+
+						} else if !qrsAsList { // we show buttons
 							payload.Interactive.Type = "button"
 							payload.Interactive.Body.Text = part
 							btns := make([]mtButton, len(qrs))
@@ -746,14 +752,14 @@ func buildPayloads(ctx context.Context, msg courier.MsgOut, h *handler, clog *co
 					var payload mtTextPayload
 					if strings.Contains(part, "https://") || strings.Contains(part, "http://") {
 						payload = mtTextPayload{
-							recipient:  rcpt,
+							To:         msg.URN().Path(),
 							Type:       "text",
 							PreviewURL: true,
 						}
 					} else {
 						payload = mtTextPayload{
-							recipient: rcpt,
-							Type:      "text",
+							To:   msg.URN().Path(),
+							Type: "text",
 						}
 					}
 					payload.Text.Body = part
@@ -918,22 +924,24 @@ func (h *handler) makeAPIRequest(payload any, accessToken string, res *courier.S
 		return courier.ErrResponseUnparseable
 	}
 
+	if slices.Contains(whatsapp.WACThrottlingErrorCodes, respPayload.Error.Code) {
+		return courier.ErrConnectionThrottled
+	}
+
+	if slices.Contains(whatsapp.WACRetryableErrorCodes, respPayload.Error.Code) {
+		return courier.ErrRetryableWithReason(strconv.Itoa(respPayload.Error.Code), respPayload.Error.Message)
+	}
+
 	if respPayload.Error.Code != 0 || respPayload.Error.Message != "" {
-
-		if slices.Contains(whatsapp.WACThrottlingErrorCodes, respPayload.Error.Code) {
-			return courier.ErrConnectionThrottled
-		}
-
-		if respPayload.Error.Code != 0 {
-			return courier.ErrFailedWithReason(strconv.Itoa(respPayload.Error.Code), respPayload.Error.Message)
-		} else if respPayload.Error.Message != "" {
-			return courier.ErrFailedWithReason("0", respPayload.Error.Message)
-		}
+		return courier.ErrFailedWithReason(strconv.Itoa(respPayload.Error.Code), respPayload.Error.Message)
 	}
 
 	if len(respPayload.Errors) > 0 {
 		if slices.Contains(whatsapp.WACThrottlingErrorCodes, respPayload.Errors[0].Code) {
 			return courier.ErrConnectionThrottled
+		}
+		if slices.Contains(whatsapp.WACRetryableErrorCodes, respPayload.Errors[0].Code) {
+			return courier.ErrRetryableWithReason(strconv.Itoa(respPayload.Errors[0].Code), respPayload.Errors[0].Title)
 		}
 		return courier.ErrFailedWithReason(strconv.Itoa(respPayload.Errors[0].Code), respPayload.Errors[0].Title)
 	}
@@ -1026,17 +1034,8 @@ var supportedLanguages = map[i18n.Locale]string{
 	"slv":    "sl",    // Slovenian
 	"spa":    "es",    // Spanish
 	"spa-AR": "es_AR", // Spanish (ARG)
-	"spa-CL": "es_CL", // Spanish (CHL)
-	"spa-CO": "es_CO", // Spanish (COL)
-	"spa-CR": "es_CR", // Spanish (CRI)
-	"spa-DO": "es_DO", // Spanish (DOM)
-	"spa-EC": "es_EC", // Spanish (ECU)
 	"spa-ES": "es_ES", // Spanish (SPA)
-	"spa-HN": "es_HN", // Spanish (HND)
 	"spa-MX": "es_MX", // Spanish (MEX)
-	"spa-PA": "es_PA", // Spanish (PAN)
-	"spa-PE": "es_PE", // Spanish (PER)
-	"spa-UY": "es_UY", // Spanish (URY)
 	"swa":    "sw",    // Swahili
 	"swe":    "sv",    // Swedish
 	"tam":    "ta",    // Tamil

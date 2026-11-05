@@ -5,12 +5,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nyaruka/courier"
-	"github.com/nyaruka/courier/core/models"
-	. "github.com/nyaruka/courier/handlers"
-	"github.com/nyaruka/courier/runtime"
-	"github.com/nyaruka/courier/test"
-	"github.com/nyaruka/courier/utils/clogs"
+	"github.com/nyaruka/courier/v26"
+	"github.com/nyaruka/courier/v26/core/models"
+	. "github.com/nyaruka/courier/v26/handlers"
+	"github.com/nyaruka/courier/v26/runtime"
+	"github.com/nyaruka/courier/v26/test"
+	"github.com/nyaruka/courier/v26/utils/clogs"
 	"github.com/nyaruka/gocommon/httpx"
 	"github.com/nyaruka/gocommon/urns"
 	"github.com/stretchr/testify/assert"
@@ -47,62 +47,10 @@ var whatsappIncomingTests = []IncomingTestCase{
 		NoInvalidChannelCheck: true,
 		ExpectedMsgText:       Sp("Hello World"),
 		ExpectedURN:           "whatsapp:5678",
-		ExpectedNewURN:        "whatsapp:US.1234",
 		ExpectedExternalID:    "external_id",
 		ExpectedDate:          time.Date(2016, 1, 30, 1, 57, 9, 0, time.UTC),
+		ExpectedNewURN:        &models.NewURNSpec{Value: "bsuid:US.1234", Action: models.NewURNAppend},
 		PrepRequest:           addValidSignature,
-	},
-	{
-		Label:                 "Receive Message WAC with invalid user_id, no new URN added",
-		URL:                   whatappReceiveURL,
-		Data:                  string(test.ReadFile("./testdata/wac/hello_invalid_user_id.json")),
-		ExpectedRespStatus:    200,
-		ExpectedBodyContains:  "Handled",
-		NoQueueErrorCheck:     true,
-		NoInvalidChannelCheck: true,
-		ExpectedMsgText:       Sp("Hello World"),
-		ExpectedURN:           "whatsapp:5678",
-		ExpectedExternalID:    "external_id",
-		ExpectedDate:          time.Date(2016, 1, 30, 1, 57, 9, 0, time.UTC),
-		PrepRequest:           addValidSignature,
-	},
-	{
-		Label:                 "Receive Message WAC from BSUID with no phone",
-		URL:                   whatappReceiveURL,
-		Data:                  string(test.ReadFile("./testdata/wac/hello_from_bsuid.json")),
-		ExpectedRespStatus:    200,
-		ExpectedBodyContains:  "Handled",
-		NoQueueErrorCheck:     true,
-		NoInvalidChannelCheck: true,
-		ExpectedMsgText:       Sp("Hello World"),
-		ExpectedURN:           "whatsapp:US.1234",
-		ExpectedContactName:   Sp("Kerry Fisher"),
-		ExpectedExternalID:    "external_id",
-		ExpectedDate:          time.Date(2016, 1, 30, 1, 57, 9, 0, time.UTC),
-		PrepRequest:           addValidSignature,
-	},
-	{
-		Label:                 "Receive Message WAC with BSUID in from",
-		URL:                   whatappReceiveURL,
-		Data:                  string(test.ReadFile("./testdata/wac/hello_bsuid_in_from.json")),
-		ExpectedRespStatus:    200,
-		ExpectedBodyContains:  "Handled",
-		NoQueueErrorCheck:     true,
-		NoInvalidChannelCheck: true,
-		ExpectedMsgText:       Sp("Hello World"),
-		ExpectedURN:           "whatsapp:US.1234",
-		ExpectedContactName:   Sp("Kerry Fisher"),
-		ExpectedExternalID:    "external_id",
-		ExpectedDate:          time.Date(2016, 1, 30, 1, 57, 9, 0, time.UTC),
-		PrepRequest:           addValidSignature,
-	},
-	{
-		Label:                "Receive Message WAC with no from or from_user_id",
-		URL:                  whatappReceiveURL,
-		Data:                 string(test.ReadFile("./testdata/wac/no_from.json")),
-		ExpectedRespStatus:   200,
-		ExpectedBodyContains: "invalid whatsapp id",
-		PrepRequest:          addValidSignature,
 	},
 	{
 		Label:                 "Receive Duplicate Valid Message",
@@ -218,6 +166,14 @@ var whatsappIncomingTests = []IncomingTestCase{
 		ExpectedURN:          "whatsapp:5678",
 		ExpectedExternalID:   "external_id",
 		ExpectedDate:         time.Date(2016, 1, 30, 1, 57, 9, 0, time.UTC),
+		PrepRequest:          addValidSignature,
+	},
+	{
+		Label:                "Receive group Message WAC, ignored",
+		URL:                  whatappReceiveURL,
+		Data:                 string(test.ReadFile("./testdata/wac/group_message.json")),
+		ExpectedRespStatus:   200,
+		ExpectedBodyContains: "ignoring group message",
 		PrepRequest:          addValidSignature,
 	},
 	{
@@ -371,23 +327,6 @@ var whatsappOutgoingTests = []OutgoingTestCase{
 		ExpectedExtIDs: []string{"157b5e14568e8"},
 	},
 	{
-		Label:   "Plain Send with BSUID as whatsapp URN",
-		MsgText: "Simple Message",
-		MsgURN:  "whatsapp:US.1234",
-		MockResponses: map[string][]*httpx.MockResponse{
-			"*/12345_ID/messages": {
-				httpx.NewMockResponse(201, nil, []byte(`{ "messages": [{"id": "157b5e14568e8"}] }`)),
-			},
-		},
-		ExpectedRequests: []ExpectedRequest{
-			{
-				Path: "/12345_ID/messages",
-				Body: `{"messaging_product":"whatsapp","recipient_type":"individual","recipient":"US.1234","type":"text","text":{"body":"Simple Message","preview_url":false}}`,
-			},
-		},
-		ExpectedExtIDs: []string{"157b5e14568e8"},
-	},
-	{
 		Label:   "Plain Send with user_id in response",
 		MsgText: "Simple Message",
 		MsgURN:  "whatsapp:250788123123",
@@ -397,7 +336,22 @@ var whatsappOutgoingTests = []OutgoingTestCase{
 			},
 		},
 		ExpectedExtIDs: []string{"157b5e14568e8"},
-		ExpectedNewURN: "whatsapp:US.1234",
+		ExpectedContactURNs: map[string]bool{
+			"whatsapp:250788123123": true,
+			"bsuid:US.1234":         true,
+		},
+	},
+	{
+		Label:               "Plain Send with user_id already on contact",
+		MsgText:             "Simple Message",
+		MsgURN:              "whatsapp:250788123123",
+		MsgContactOtherURNs: []urns.URN{"bsuid:US.1234"},
+		MockResponses: map[string][]*httpx.MockResponse{
+			"*/12345_ID/messages": {
+				httpx.NewMockResponse(201, nil, []byte(`{ "contacts": [{"input": "250788123123", "user_id": "US.1234"}], "messages": [{"id": "157b5e14568e8"}] }`)),
+			},
+		},
+		ExpectedExtIDs: []string{"157b5e14568e8"},
 	},
 	{
 		Label:   "Unicode Send",
@@ -556,7 +510,7 @@ var whatsappOutgoingTests = []OutgoingTestCase{
 			},
 		},
 		ExpectedRequests: []ExpectedRequest{{
-			Body: `{"messaging_product":"whatsapp","recipient_type":"individual","to":"250788123123","type":"template","template":{"name":"revive_issue","language":{"policy":"deterministic","code":"en_US"},"components":[{"type":"header","parameters":[{"type":"image","text":"","image":{"link":"https://foo.bar/image.jpg"}}]},{"type":"body","parameters":[{"type":"text","text":"Chef"},{"type":"text","text":"tomorrow"}]}]}}`,
+			Body: `{"messaging_product":"whatsapp","recipient_type":"individual","to":"250788123123","type":"template","template":{"name":"revive_issue","language":{"policy":"deterministic","code":"en_US"},"components":[{"type":"header","parameters":[{"type":"image","image":{"link":"https://foo.bar/image.jpg"}}]},{"type":"body","parameters":[{"type":"text","text":"Chef"},{"type":"text","text":"tomorrow"}]}]}}`,
 		}},
 		ExpectedExtIDs: []string{"157b5e14568e8"},
 	},
@@ -607,7 +561,7 @@ var whatsappOutgoingTests = []OutgoingTestCase{
 			},
 		},
 		ExpectedRequests: []ExpectedRequest{{
-			Body: `{"messaging_product":"whatsapp","recipient_type":"individual","to":"250788123123","type":"template","template":{"name":"revive_issue","language":{"policy":"deterministic","code":"en_US"},"components":[{"type":"header","parameters":[{"type":"image","text":"","image":{"link":"https://foo.bar/image.jpg"}}]},{"type":"body","parameters":[{"type":"text","text":"Ryan Lewis"},{"type":"text","text":"niño"}]},{"type":"button","sub_type":"quick_reply","index":"0","parameters":[{"type":"payload","text":"","payload":"Sip"}]},{"type":"button","sub_type":"url","index":"1","parameters":[{"type":"text","text":"id00231"}]}]}}`,
+			Body: `{"messaging_product":"whatsapp","recipient_type":"individual","to":"250788123123","type":"template","template":{"name":"revive_issue","language":{"policy":"deterministic","code":"en_US"},"components":[{"type":"header","parameters":[{"type":"image","image":{"link":"https://foo.bar/image.jpg"}}]},{"type":"body","parameters":[{"type":"text","text":"Ryan Lewis"},{"type":"text","text":"niño"}]},{"type":"button","sub_type":"quick_reply","index":"0","parameters":[{"type":"payload","payload":"Sip"}]},{"type":"button","sub_type":"url","index":"1","parameters":[{"type":"text","text":"id00231"}]}]}}`,
 		}},
 		ExpectedExtIDs: []string{"157b5e14568e8"},
 	},
@@ -615,7 +569,7 @@ var whatsappOutgoingTests = []OutgoingTestCase{
 		Label:           "Interactive Button Message Send",
 		MsgText:         "Interactive Button Msg",
 		MsgURN:          "whatsapp:250788123123",
-		MsgQuickReplies: []models.QuickReply{{Text: "BUTTON1"}},
+		MsgQuickReplies: []models.QuickReply{{Type: "text", Text: "BUTTON1"}},
 		MockResponses: map[string][]*httpx.MockResponse{
 			"*/12345_ID/messages": {
 				httpx.NewMockResponse(201, nil, []byte(`{ "messages": [{"id": "157b5e14568e8"}] }`)),
@@ -630,7 +584,7 @@ var whatsappOutgoingTests = []OutgoingTestCase{
 		Label:           "Interactive List QRs Extra Send",
 		MsgText:         "Interactive List QRs Extra Msg",
 		MsgURN:          "whatsapp:250788123123",
-		MsgQuickReplies: []models.QuickReply{{Text: "OPTION1", Extra: "This option is the most popular"}},
+		MsgQuickReplies: []models.QuickReply{{Type: "text", Text: "OPTION1", Extra: "This option is the most popular"}},
 		MockResponses: map[string][]*httpx.MockResponse{
 			"*/12345_ID/messages": {
 				httpx.NewMockResponse(201, nil, []byte(`{ "messages": [{"id": "157b5e14568e8"}] }`)),
@@ -645,7 +599,7 @@ var whatsappOutgoingTests = []OutgoingTestCase{
 		Label:           "Interactive List QRs Extra Empty Send",
 		MsgText:         "Interactive List QRs Extra Empty",
 		MsgURN:          "whatsapp:250788123123",
-		MsgQuickReplies: []models.QuickReply{{Text: "OPTION1", Extra: ""}},
+		MsgQuickReplies: []models.QuickReply{{Type: "text", Text: "OPTION1", Extra: ""}},
 		MockResponses: map[string][]*httpx.MockResponse{
 			"*/12345_ID/messages": {
 				httpx.NewMockResponse(201, nil, []byte(`{ "messages": [{"id": "157b5e14568e8"}] }`)),
@@ -660,7 +614,7 @@ var whatsappOutgoingTests = []OutgoingTestCase{
 		Label:           "Interactive List Message Send",
 		MsgText:         "Interactive List Msg",
 		MsgURN:          "whatsapp:250788123123",
-		MsgQuickReplies: []models.QuickReply{{Text: "ROW1"}, {Text: "ROW2"}, {Text: "ROW3", Extra: "Third description"}, {Text: "ROW4"}},
+		MsgQuickReplies: []models.QuickReply{{Type: "text", Text: "ROW1"}, {Type: "text", Text: "ROW2"}, {Type: "text", Text: "ROW3", Extra: "Third description"}, {Type: "text", Text: "ROW4"}},
 		MockResponses: map[string][]*httpx.MockResponse{
 			"*/12345_ID/messages": {
 				httpx.NewMockResponse(201, nil, []byte(`{ "messages": [{"id": "157b5e14568e8"}] }`)),
@@ -676,9 +630,9 @@ var whatsappOutgoingTests = []OutgoingTestCase{
 		MsgText: "Interactive List Msg",
 		MsgURN:  "whatsapp:250788123123",
 		MsgQuickReplies: []models.QuickReply{
-			{Text: "ROW1"}, {Text: "ROW2"}, {Text: "ROW3"}, {Text: "ROW4"},
-			{Text: "ROW5"}, {Text: "ROW6"}, {Text: "ROW7"}, {Text: "ROW8"},
-			{Text: "ROW9"}, {Text: "ROW10"}, {Text: "ROW11"}, {Text: "ROW12"},
+			{Type: "text", Text: "ROW1"}, {Type: "text", Text: "ROW2"}, {Type: "text", Text: "ROW3"}, {Type: "text", Text: "ROW4"},
+			{Type: "text", Text: "ROW5"}, {Type: "text", Text: "ROW6"}, {Type: "text", Text: "ROW7"}, {Type: "text", Text: "ROW8"},
+			{Type: "text", Text: "ROW9"}, {Type: "text", Text: "ROW10"}, {Type: "text", Text: "ROW11"}, {Type: "text", Text: "ROW12"},
 		},
 		MockResponses: map[string][]*httpx.MockResponse{
 			"*/12345_ID/messages": {
@@ -696,7 +650,7 @@ var whatsappOutgoingTests = []OutgoingTestCase{
 		MsgText:         "Hola",
 		MsgURN:          "whatsapp:250788123123",
 		MsgLocale:       "spa",
-		MsgQuickReplies: []models.QuickReply{{Text: "ROW1"}, {Text: "ROW2"}, {Text: "ROW3"}, {Text: "ROW4"}},
+		MsgQuickReplies: []models.QuickReply{{Type: "text", Text: "ROW1"}, {Type: "text", Text: "ROW2"}, {Type: "text", Text: "ROW3"}, {Type: "text", Text: "ROW4"}},
 		MockResponses: map[string][]*httpx.MockResponse{
 			"*/12345_ID/messages": {
 				httpx.NewMockResponse(201, nil, []byte(`{ "messages": [{"id": "157b5e14568e8"}] }`)),
@@ -711,7 +665,7 @@ var whatsappOutgoingTests = []OutgoingTestCase{
 		Label:           "Interactive Button Message Send with image attachment",
 		MsgText:         "Interactive Button Msg",
 		MsgURN:          "whatsapp:250788123123",
-		MsgQuickReplies: []models.QuickReply{{Text: "BUTTON1"}},
+		MsgQuickReplies: []models.QuickReply{{Type: "text", Text: "BUTTON1"}},
 		MsgAttachments:  []string{"image/jpeg:https://foo.bar/image.jpg"},
 		MockResponses: map[string][]*httpx.MockResponse{
 			"*/12345_ID/messages": {
@@ -730,7 +684,7 @@ var whatsappOutgoingTests = []OutgoingTestCase{
 		Label:           "Interactive Button Message Send with video attachment",
 		MsgText:         "Interactive Button Msg",
 		MsgURN:          "whatsapp:250788123123",
-		MsgQuickReplies: []models.QuickReply{{Text: "BUTTON1"}},
+		MsgQuickReplies: []models.QuickReply{{Type: "text", Text: "BUTTON1"}},
 		MsgAttachments:  []string{"video/mp4:https://foo.bar/video.mp4"},
 		MockResponses: map[string][]*httpx.MockResponse{
 			"*/12345_ID/messages": {
@@ -749,7 +703,7 @@ var whatsappOutgoingTests = []OutgoingTestCase{
 		Label:           "Interactive Button Message Send with document attachment",
 		MsgText:         "Interactive Button Msg",
 		MsgURN:          "whatsapp:250788123123",
-		MsgQuickReplies: []models.QuickReply{{Text: "BUTTON1"}},
+		MsgQuickReplies: []models.QuickReply{{Type: "text", Text: "BUTTON1"}},
 		MsgAttachments:  []string{"document/pdf:https://foo.bar/document.pdf"},
 		MockResponses: map[string][]*httpx.MockResponse{
 			"*/12345_ID/messages": {
@@ -768,7 +722,7 @@ var whatsappOutgoingTests = []OutgoingTestCase{
 		Label:           "Interactive Button Message Send with audio attachment",
 		MsgText:         "Interactive Button Msg",
 		MsgURN:          "whatsapp:250788123123",
-		MsgQuickReplies: []models.QuickReply{{Text: "ROW1"}, {Text: "ROW2"}, {Text: "ROW3"}},
+		MsgQuickReplies: []models.QuickReply{{Type: "text", Text: "ROW1"}, {Type: "text", Text: "ROW2"}, {Type: "text", Text: "ROW3"}},
 		MsgAttachments:  []string{"audio/mp3:https://foo.bar/audio.mp3"},
 		MockResponses: map[string][]*httpx.MockResponse{
 			"*/12345_ID/messages": {
@@ -786,7 +740,7 @@ var whatsappOutgoingTests = []OutgoingTestCase{
 		Label:           "Interactive List Message Send with attachment",
 		MsgText:         "Interactive List Msg",
 		MsgURN:          "whatsapp:250788123123",
-		MsgQuickReplies: []models.QuickReply{{Text: "ROW1"}, {Text: "ROW2"}, {Text: "ROW3"}, {Text: "ROW4"}},
+		MsgQuickReplies: []models.QuickReply{{Type: "text", Text: "ROW1"}, {Type: "text", Text: "ROW2"}, {Type: "text", Text: "ROW3"}, {Type: "text", Text: "ROW4"}},
 		MsgAttachments:  []string{"image/jpeg:https://foo.bar/image.jpg"},
 		MockResponses: map[string][]*httpx.MockResponse{
 			"*/12345_ID/messages": {
@@ -797,6 +751,54 @@ var whatsappOutgoingTests = []OutgoingTestCase{
 		ExpectedRequests: []ExpectedRequest{
 			{Body: `{"messaging_product":"whatsapp","recipient_type":"individual","to":"250788123123","type":"image","image":{"link":"https://foo.bar/image.jpg"}}`},
 			{Body: `{"messaging_product":"whatsapp","recipient_type":"individual","to":"250788123123","type":"interactive","interactive":{"type":"list","body":{"text":"Interactive List Msg"},"action":{"button":"Menu","sections":[{"rows":[{"id":"0","title":"ROW1"},{"id":"1","title":"ROW2"},{"id":"2","title":"ROW3"},{"id":"3","title":"ROW4"}]}]}}}`},
+		},
+		ExpectedExtIDs: []string{"157b5e14568e8", "157b5e14568e8"},
+	},
+	{
+		Label:           "Interactive with location request",
+		MsgText:         "Interactive send location",
+		MsgURN:          "whatsapp:250788123123",
+		MsgQuickReplies: []models.QuickReply{{Type: "location"}},
+		MockResponses: map[string][]*httpx.MockResponse{
+			"*/12345_ID/messages": {
+				httpx.NewMockResponse(201, nil, []byte(`{ "messages": [{"id": "157b5e14568e8"}] }`)),
+			},
+		},
+		ExpectedRequests: []ExpectedRequest{{
+			Body: `{"messaging_product":"whatsapp","recipient_type":"individual","to":"250788123123","type":"interactive","interactive":{"type":"location_request_message","body":{"text":"Interactive send location"},"action":{"name":"send_location"}}}`,
+		}},
+		ExpectedExtIDs: []string{"157b5e14568e8"},
+	},
+	{
+		Label:           "Interactive with location request, with extra quick replies ignored",
+		MsgText:         "Interactive send location",
+		MsgURN:          "whatsapp:250788123123",
+		MsgQuickReplies: []models.QuickReply{{Type: "location"}, {Type: "text", Text: "Yes"}},
+		MockResponses: map[string][]*httpx.MockResponse{
+			"*/12345_ID/messages": {
+				httpx.NewMockResponse(201, nil, []byte(`{ "messages": [{"id": "157b5e14568e8"}] }`)),
+			},
+		},
+		ExpectedRequests: []ExpectedRequest{{
+			Body: `{"messaging_product":"whatsapp","recipient_type":"individual","to":"250788123123","type":"interactive","interactive":{"type":"location_request_message","body":{"text":"Interactive send location"},"action":{"name":"send_location"}}}`,
+		}},
+		ExpectedExtIDs: []string{"157b5e14568e8"},
+	},
+	{
+		Label:           "Interactive with location request, with attachment",
+		MsgText:         "Interactive send location",
+		MsgURN:          "whatsapp:250788123123",
+		MsgQuickReplies: []models.QuickReply{{Type: "location"}},
+		MsgAttachments:  []string{"image/jpeg:https://foo.bar/image.jpg"},
+		MockResponses: map[string][]*httpx.MockResponse{
+			"*/12345_ID/messages": {
+				httpx.NewMockResponse(201, nil, []byte(`{ "messages": [{"id": "157b5e14568e8"}] }`)),
+				httpx.NewMockResponse(201, nil, []byte(`{ "messages": [{"id": "157b5e14568e8"}] }`)),
+			},
+		},
+		ExpectedRequests: []ExpectedRequest{
+			{Body: `{"messaging_product":"whatsapp","recipient_type":"individual","to":"250788123123","type":"image","image":{"link":"https://foo.bar/image.jpg"}}`},
+			{Body: `{"messaging_product":"whatsapp","recipient_type":"individual","to":"250788123123","type":"interactive","interactive":{"type":"location_request_message","body":{"text":"Interactive send location"},"action":{"name":"send_location"}}}`},
 		},
 		ExpectedExtIDs: []string{"157b5e14568e8", "157b5e14568e8"},
 	},
@@ -851,6 +853,17 @@ var whatsappOutgoingTests = []OutgoingTestCase{
 		ExpectedError: courier.ErrConnectionThrottled,
 	},
 	{
+		Label:   "Error Retryable",
+		MsgText: "Error",
+		MsgURN:  "whatsapp:250788123123",
+		MockResponses: map[string][]*httpx.MockResponse{
+			"*/12345_ID/messages": {
+				httpx.NewMockResponse(400, nil, []byte(`{ "error": {"message": "Media upload error","code": 131053 }}`)),
+			},
+		},
+		ExpectedError: courier.ErrRetryableWithReason("131053", "Media upload error"),
+	},
+	{
 		Label:   "Error",
 		MsgText: "Error",
 		MsgURN:  "whatsapp:250788123123",
@@ -860,6 +873,17 @@ var whatsappOutgoingTests = []OutgoingTestCase{
 			},
 		},
 		ExpectedError: courier.ErrFailedWithReason("368", "(#368) Temporarily blocked for policies violations"),
+	},
+	{
+		Label:   "Error Message",
+		MsgText: "Error",
+		MsgURN:  "whatsapp:250788123123",
+		MockResponses: map[string][]*httpx.MockResponse{
+			"*/12345_ID/messages": {
+				httpx.NewMockResponse(403, nil, []byte(`{ "error": {"message": "Other error with message","code": 0 }}`)),
+			},
+		},
+		ExpectedError: courier.ErrFailedWithReason("0", "Other error with message"),
 	},
 	{
 		Label:   "Error Connection",
@@ -912,13 +936,13 @@ func TestWhatsAppBuildAttachmentRequest(t *testing.T) {
 	s := newServerWithWAC(mb)
 	handler := &handler{NewBaseHandler(models.ChannelType("WAC"), "WhatsApp Cloud", DisableUUIDRouting())}
 	handler.Initialize(s)
-	req, _ := handler.BuildAttachmentRequest(context.Background(), mb, whatsappTestChannels[0], "https://example.org/v1/media/41", nil)
+	req, _ := handler.BuildAttachmentRequest(context.Background(), whatsappTestChannels[0], "https://example.org/v1/media/41", nil)
 	assert.Equal(t, "https://example.org/v1/media/41", req.URL.String())
 	assert.Equal(t, "Bearer wac_admin_system_user_token", req.Header.Get("Authorization"))
 }
 
-func newServerWithWAC(backend courier.Backend) courier.Server {
+func newServerWithWAC(backend courier.Backend) *courier.Server {
 	cfg := runtime.NewDefaultConfig()
 	cfg.WhatsappAdminSystemUserToken = "wac_admin_system_user_token"
-	return courier.NewServer(cfg, backend)
+	return courier.NewServer(runtime.NewTestRuntime(cfg), backend)
 }

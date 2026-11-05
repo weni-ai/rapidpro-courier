@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"net/url"
 
-	"github.com/nyaruka/courier"
-	"github.com/nyaruka/gocommon/httpx"
+	"github.com/nyaruka/courier/v26"
+	"github.com/nyaruka/courier/v26/utils"
 	"github.com/pkg/errors"
 )
 
@@ -38,11 +38,11 @@ func SendWebhooks(channel courier.Channel, r *http.Request, configWebhook interf
 		req.Header.Set(name, value.(string))
 	}
 
-	trace, err := httpx.DoTrace(http.DefaultClient, req, nil, nil, 1024)
+	trace, _, err := utils.TraceHTTP(http.DefaultClient, req, 1024)
 	if trace != nil {
 		clog.HTTP(trace)
 	}
-	if err != nil || trace.Response.StatusCode/100 != 2 {
+	if err != nil || trace == nil || trace.Response == nil || trace.Response.StatusCode/100 != 2 {
 		return errors.Wrap(err, "status other than 200")
 	}
 

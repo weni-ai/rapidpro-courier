@@ -9,16 +9,16 @@ import (
 	"time"
 
 	"github.com/buger/jsonparser"
-	"github.com/nyaruka/courier"
-	"github.com/nyaruka/courier/core/models"
-	"github.com/nyaruka/courier/handlers"
+	"github.com/nyaruka/courier/v26"
+	"github.com/nyaruka/courier/v26/core/models"
+	"github.com/nyaruka/courier/v26/handlers"
 	"github.com/nyaruka/gocommon/httpx"
 	"github.com/nyaruka/gocommon/urns"
 )
 
 const configIsShared = "is_shared"
 
-var sendURL = "https://api.africastalking.com/version1/messaging"
+var defaultSendURL = "https://api.africastalking.com/version1/messaging"
 
 func init() {
 	courier.RegisterHandler(newHandler())
@@ -41,7 +41,7 @@ type moForm struct {
 }
 
 // Initialize is called by the engine once everything is loaded
-func (h *handler) Initialize(s courier.Server) error {
+func (h *handler) Initialize(s *courier.Server) error {
 	h.SetServer(s)
 	s.AddHandlerRoute(h, http.MethodPost, "receive", courier.ChannelLogTypeMsgReceive, h.receiveMessage)
 	s.AddHandlerRoute(h, http.MethodPost, "callback", courier.ChannelLogTypeMsgReceive, h.receiveMessage)
@@ -124,7 +124,8 @@ func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.Sen
 	username := msg.Channel().StringConfigForKey(models.ConfigUsername, "")
 	apiKey := msg.Channel().StringConfigForKey(models.ConfigAPIKey, "")
 
-	if username == "" || apiKey == "" {
+	sendURL := msg.Channel().StringConfigForKey(models.ConfigSendURL, defaultSendURL)
+	if username == "" || apiKey == "" || sendURL == "" {
 		return courier.ErrChannelConfig
 	}
 

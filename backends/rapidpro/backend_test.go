@@ -6,20 +6,19 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/buger/jsonparser"
 	"github.com/gomodule/redigo/redis"
-	"github.com/nyaruka/courier"
-	"github.com/nyaruka/courier/core/models"
-	"github.com/nyaruka/courier/test"
-	"github.com/nyaruka/courier/testsuite"
-	"github.com/nyaruka/courier/utils/queue"
+	"github.com/nyaruka/courier/v26"
+	"github.com/nyaruka/courier/v26/core/models"
+	"github.com/nyaruka/courier/v26/test"
+	"github.com/nyaruka/courier/v26/testsuite"
+	"github.com/nyaruka/courier/v26/utils"
+	"github.com/nyaruka/courier/v26/utils/queue"
 	"github.com/nyaruka/gocommon/aws/dynamo"
 	"github.com/nyaruka/gocommon/aws/dynamo/dyntest"
 	"github.com/nyaruka/gocommon/dates"
@@ -54,10 +53,10 @@ func (ts *BackendTestSuite) SetupSuite() {
 
 func (ts *BackendTestSuite) TearDownSuite() {
 	ctx := context.Background()
-	ts.b.Stop()
+	err := ts.b.Stop()
+	ts.Require().NoError(err)
 
-	// TODO figure out why this hangs
-	// testsuite.ResetDB(ts.T(), ts.b.rt)
+	testsuite.ResetDB(ts.T(), ts.b.rt)
 	testsuite.ResetValkey(ts.T(), ts.b.rt)
 
 	dyntest.Truncate(ts.T(), ts.b.rt.Dynamo, ts.b.rt.Writers.Main.Table())
@@ -97,9 +96,20 @@ func (ts *BackendTestSuite) TestDeleteMsgByExternalID() {
 	ts.Nil(err)
 
 	ts.assertQueuedContactTask(100, "msg_deleted", map[string]any{"msg_uuid": "0199df10-9519-7fe2-a29c-c890d1713673"})
+
+	// reset valkey for next test
+	testsuite.ResetValkey(ts.T(), ts.b.rt)
+	// a valid external identifier becomes a queued task as well
+	err = ts.b.DeleteMsgByExternalID(ctx, knChannel, "ext3")
+	ts.Nil(err)
+
+	ts.assertQueuedContactTask(100, "msg_deleted", map[string]any{"msg_uuid": "019bb1ca-a92d-78f5-ba61-06aa62f2b41a"})
 }
 
 func (ts *BackendTestSuite) TestContact() {
+
+	testsuite.ResetDB(ts.T(), ts.b.rt)
+
 	knChannel := ts.getChannel("KN", "dbc126ed-66bc-4e28-b67b-81dc3327c95d")
 	clog := courier.NewChannelLog(courier.ChannelLogTypeUnknown, knChannel, nil)
 	urn := urns.URN("tel:+12065551518")
@@ -179,47 +189,6 @@ func (ts *BackendTestSuite) TestContactRace() {
 	ts.Equal(contact1.ID_, contact2.ID_)
 }
 
-func (ts *BackendTestSuite) TestAddAndRemoveContactURN() {
-	knChannel := ts.getChannel("KN", "dbc126ed-66bc-4e28-b67b-81dc3327c95d")
-	clog := courier.NewChannelLog(courier.ChannelLogTypeUnknown, knChannel, nil)
-	ctx := context.Background()
-
-	cURN := urns.URN("tel:+12067799192")
-
-	contact, err := contactForURN(ctx, ts.b, knChannel.OrgID_, knChannel, cURN, nil, "", true, clog)
-	ts.NoError(err)
-	ts.NotNil(contact)
-
-	tx, err := ts.b.rt.DB.Beginx()
-	ts.NoError(err)
-
-	contactURNs, err := models.GetURNsForContact(ctx, tx, contact.ID_)
-	ts.NoError(err)
-	ts.Equal(len(contactURNs), 1)
-
-	urn := urns.URN("tel:+12065551518")
-	addedURN, err := ts.b.AddURNtoContact(ctx, knChannel, contact, urn, nil)
-	ts.NoError(err)
-	ts.NotNil(addedURN)
-
-	tx, err = ts.b.rt.DB.Beginx()
-	ts.NoError(err)
-
-	contactURNs, err = models.GetURNsForContact(ctx, tx, contact.ID_)
-	ts.NoError(err)
-	ts.Equal(len(contactURNs), 2)
-
-	removedURN, err := ts.b.RemoveURNfromContact(ctx, knChannel, contact, urn)
-	ts.NoError(err)
-	ts.NotNil(removedURN)
-
-	tx, err = ts.b.rt.DB.Beginx()
-	ts.NoError(err)
-	contactURNs, err = models.GetURNsForContact(ctx, tx, contact.ID_)
-	ts.NoError(err)
-	ts.Equal(len(contactURNs), 1)
-}
-
 func (ts *BackendTestSuite) TestContactURN() {
 	knChannel := ts.getChannel("KN", "dbc126ed-66bc-4e28-b67b-81dc3327c95d")
 	fbChannel := ts.getChannel("FBA", "dbc126ed-66bc-4e28-b67b-81dc3327c96a")
@@ -234,6 +203,7 @@ func (ts *BackendTestSuite) TestContactURN() {
 
 	tx, err := ts.b.rt.DB.Beginx()
 	ts.NoError(err)
+	defer tx.Rollback()
 
 	contact, err = contactForURN(ctx, ts.b, fbChannel.OrgID_, fbChannel, urn, map[string]string{"token1": "chestnut"}, "", true, clog)
 	ts.NoError(err)
@@ -252,6 +222,7 @@ func (ts *BackendTestSuite) TestContactURN() {
 
 	tx, err = ts.b.rt.DB.Beginx()
 	ts.NoError(err)
+	defer tx.Rollback()
 
 	// then with our twilio channel
 	fbURN, err := models.GetOrCreateContactURN(ctx, tx, fbChannel, contact.ID_, urn, nil)
@@ -272,6 +243,7 @@ func (ts *BackendTestSuite) TestContactURN() {
 
 	tx, err = ts.b.rt.DB.Beginx()
 	ts.NoError(err)
+	defer tx.Rollback()
 
 	// again with different auth
 	fbURN, err = models.GetOrCreateContactURN(ctx, tx, fbChannel, contact.ID_, urn, map[string]string{"token3": "peanut"})
@@ -295,6 +267,7 @@ func (ts *BackendTestSuite) TestContactURN() {
 
 	tx, err = ts.b.rt.DB.Beginx()
 	ts.NoError(err)
+	defer tx.Rollback()
 
 	tgContactURN, err := models.GetOrCreateContactURN(ctx, tx, tgChannel, tgContact.ID_, tgURNDisplay, nil)
 	ts.NoError(err)
@@ -326,7 +299,7 @@ func (ts *BackendTestSuite) TestContactURN() {
 	ts.Equal(contact2.URNID_, contact3.URNID_)
 }
 
-func (ts *BackendTestSuite) TestContactURNPriority() {
+func (ts *BackendTestSuite) TestContactURNMetadata() {
 	knChannel := ts.getChannel("KN", "dbc126ed-66bc-4e28-b67b-81dc3327c95d")
 	fbChannel := ts.getChannel("FBA", "dbc126ed-66bc-4e28-b67b-81dc3327c96a")
 	knURN := urns.URN("tel:+12065551111")
@@ -340,13 +313,14 @@ func (ts *BackendTestSuite) TestContactURNPriority() {
 
 	tx, err := ts.b.rt.DB.Beginx()
 	ts.NoError(err)
+	defer tx.Rollback()
 
 	_, err = models.GetOrCreateContactURN(ctx, tx, fbChannel, knContact.ID_, fbURN, nil)
 	ts.NoError(err)
 	ts.NoError(tx.Commit())
 
-	// ok, now looking up our contact should reset our URNs and their affinity..
-	// FacebookURN should be first all all URNs should now use Facebook channel
+	// looking up contact by fbURN should update channel_id on the URN but NOT reorder priorities
+	// (priority reordering is delegated to mailroom)
 	fbContact, err := contactForURN(ctx, ts.b, fbChannel.OrgID_, fbChannel, fbURN, nil, "", true, clog)
 	ts.NoError(err)
 
@@ -355,15 +329,17 @@ func (ts *BackendTestSuite) TestContactURNPriority() {
 	// get all the URNs for this contact
 	tx, err = ts.b.rt.DB.Beginx()
 	ts.NoError(err)
+	defer tx.Rollback()
 
 	urns, err := models.GetURNsForContact(ctx, tx, fbContact.ID_)
 	ts.NoError(err)
 	ts.NoError(tx.Commit())
 
-	ts.Equal("tel:+12065552222", urns[0].Identity)
-	ts.Equal(fbChannel.ID(), urns[0].ChannelID)
+	// priorities are unchanged (knURN was created first so it's still top priority)
+	ts.Equal("tel:+12065551111", urns[0].Identity)
 
-	ts.Equal("tel:+12065551111", urns[1].Identity)
+	ts.Equal("tel:+12065552222", urns[1].Identity)
+	// but channel_id on the looked-up URN should be updated to the fb channel
 	ts.Equal(fbChannel.ID(), urns[1].ChannelID)
 }
 
@@ -376,7 +352,7 @@ func (ts *BackendTestSuite) TestMsgStatus() {
 		clog := courier.NewChannelLog(courier.ChannelLogTypeMsgStatus, channel, nil)
 		statusObj := ts.b.NewStatusUpdate(channel, uuid, status, clog)
 		if newExtID != "" {
-			statusObj.SetExternalID(newExtID)
+			statusObj.SetExternalIdentifier(newExtID)
 		}
 		err := ts.b.WriteStatusUpdate(ctx, statusObj)
 		ts.NoError(err)
@@ -408,7 +384,7 @@ func (ts *BackendTestSuite) TestMsgStatus() {
 
 	m := testsuite.ReadDBMsg(ts.T(), ts.b.rt, "0199df10-10dc-7e6e-834b-3d959ece93b2")
 	ts.Equal(models.MsgStatusWired, m.Status)
-	ts.Equal(null.String("ext0"), m.ExternalID)
+	ts.Equal(null.String("ext0"), m.ExternalIdentifier)
 	ts.True(m.ModifiedOn.After(now))
 	ts.True(m.SentOn.After(now))
 	ts.Equal(null.NullString, m.FailedReason)
@@ -427,7 +403,7 @@ func (ts *BackendTestSuite) TestMsgStatus() {
 
 	m = testsuite.ReadDBMsg(ts.T(), ts.b.rt, "0199df10-10dc-7e6e-834b-3d959ece93b2")
 	ts.Equal(models.MsgStatusSent, m.Status)
-	ts.Equal(null.String("ext0"), m.ExternalID) // no change
+	ts.Equal(null.String("ext0"), m.ExternalIdentifier) // no change
 	ts.True(m.ModifiedOn.After(now))
 	ts.True(m.SentOn.Equal(sentOn)) // no change
 	ts.Equal([]string{string(clog1.UUID), string(clog2.UUID)}, []string(m.LogUUIDs))
@@ -444,7 +420,8 @@ func (ts *BackendTestSuite) TestMsgStatus() {
 	m = testsuite.ReadDBMsg(ts.T(), ts.b.rt, "0199df10-10dc-7e6e-834b-3d959ece93b2")
 	ts.Equal(m.Status, models.MsgStatusDelivered)
 	ts.True(m.ModifiedOn.After(now))
-	ts.True(m.SentOn.Equal(sentOn)) // no change
+	ts.True(m.SentOn.Equal(sentOn))                     // no change
+	ts.Equal(null.String("ext0"), m.ExternalIdentifier) // no change
 	ts.Equal([]string{string(clog1.UUID), string(clog2.UUID), string(clog3.UUID)}, []string(m.LogUUIDs))
 
 	history = getHistoryItems()
@@ -473,7 +450,7 @@ func (ts *BackendTestSuite) TestMsgStatus() {
 
 	m = testsuite.ReadDBMsg(ts.T(), ts.b.rt, "0199df10-9519-7fe2-a29c-c890d1713673")
 	ts.Equal(models.MsgStatusPending, m.Status)
-	ts.Equal(m.ExternalID, null.String("ext2"))
+	ts.Equal(m.ExternalIdentifier, null.String("ext2"))
 	ts.Equal([]string(nil), []string(m.LogUUIDs))
 
 	// update to FAILED using external id
@@ -511,6 +488,7 @@ func (ts *BackendTestSuite) TestMsgStatus() {
 	ts.Equal(models.MsgStatusSent, m.Status)
 	ts.True(m.ModifiedOn.After(now))
 	ts.True(m.SentOn.Equal(sentOn)) // no change
+	ts.Equal(m.ExternalIdentifier, null.String("ext1"))
 
 	// put test outgoing messages back into queued state
 	ts.b.rt.DB.MustExec(`UPDATE msgs_msg SET status = 'Q', sent_on = NULL WHERE id IN ($1, $2)`, 10002, 10001)
@@ -522,8 +500,11 @@ func (ts *BackendTestSuite) TestMsgStatus() {
 	m = testsuite.ReadDBMsg(ts.T(), ts.b.rt, "0199df0f-9f82-7689-b02d-f34105991321")
 	ts.Equal(models.MsgStatusSent, m.Status)
 	ts.NotNil(m.SentOn)
+	ts.Equal(m.ExternalIdentifier, null.String("ext1"))
+
 	m = testsuite.ReadDBMsg(ts.T(), ts.b.rt, "0199df10-10dc-7e6e-834b-3d959ece93b2")
 	ts.Equal(models.MsgStatusDelivered, m.Status)
+	ts.Equal(m.ExternalIdentifier, null.String("ext0"))
 	ts.NotNil(m.SentOn)
 
 	// reset our status to sent
@@ -546,6 +527,7 @@ func (ts *BackendTestSuite) TestMsgStatus() {
 	ts.True(m.ModifiedOn.After(now))
 	ts.True(m.NextAttempt.After(now))
 	ts.Equal(null.NullString, m.FailedReason)
+	ts.Equal(m.ExternalIdentifier, null.String("ext1"))
 
 	// second go
 	status = ts.b.NewStatusUpdateByExternalID(channel, "ext1", models.MsgStatusErrored, clog6)
@@ -568,70 +550,6 @@ func (ts *BackendTestSuite) TestMsgStatus() {
 	ts.Equal(m.ErrorCount, 3)
 	ts.Equal(null.String("E"), m.FailedReason)
 
-	// update URN when the new doesn't exist
-	tx, _ := ts.b.rt.DB.BeginTxx(ctx, nil)
-	oldURN := urns.URN("whatsapp:55988776655")
-	err = models.InsertContactURN(ctx, tx, models.NewContactURN(channel.OrgID_, channel.ID_, models.NilContactID, oldURN, nil))
-	ts.NoError(err)
-
-	ts.NoError(tx.Commit())
-
-	newURN := urns.URN("whatsapp:5588776655")
-	status = ts.b.NewStatusUpdate(channel, "0199df0f-9f82-7689-b02d-f34105991321", models.MsgStatusSent, clog6)
-	status.SetURNUpdate(oldURN, newURN)
-
-	ts.NoError(ts.b.WriteStatusUpdate(ctx, status))
-
-	tx, _ = ts.b.rt.DB.BeginTxx(ctx, nil)
-	contactURN, err := models.GetContactURNByIdentity(ctx, tx, channel.OrgID_, newURN)
-
-	ts.NoError(err)
-	ts.Equal(contactURN.Identity, newURN.Identity().String())
-	ts.NoError(tx.Commit())
-
-	// new URN already exits but don't have an associated contact
-	oldURN = urns.URN("whatsapp:55999887766")
-	newURN = urns.URN("whatsapp:5599887766")
-	tx, _ = ts.b.rt.DB.BeginTxx(ctx, nil)
-	contact, _ := contactForURN(ctx, ts.b, channel.OrgID_, channel, oldURN, nil, "", true, clog6)
-	_ = models.InsertContactURN(ctx, tx, models.NewContactURN(channel.OrgID_, channel.ID_, models.NilContactID, newURN, nil))
-
-	ts.NoError(tx.Commit())
-
-	status = ts.b.NewStatusUpdate(channel, "019a25d9-4d3a-710c-8af6-897e0cb66a8e", models.MsgStatusSent, clog6)
-	status.SetURNUpdate(oldURN, newURN)
-
-	ts.NoError(ts.b.WriteStatusUpdate(ctx, status))
-
-	tx, _ = ts.b.rt.DB.BeginTxx(ctx, nil)
-	newContactURN, _ := models.GetContactURNByIdentity(ctx, tx, channel.OrgID_, newURN)
-	oldContactURN, _ := models.GetContactURNByIdentity(ctx, tx, channel.OrgID_, oldURN)
-
-	ts.Equal(newContactURN.ContactID, contact.ID_)
-	ts.Equal(oldContactURN.ContactID, models.NilContactID)
-	ts.NoError(tx.Commit())
-
-	// new URN already exits and have an associated contact
-	oldURN = urns.URN("whatsapp:55988776655")
-	newURN = urns.URN("whatsapp:5588776655")
-	tx, _ = ts.b.rt.DB.BeginTxx(ctx, nil)
-	_, _ = contactForURN(ctx, ts.b, channel.OrgID_, channel, oldURN, nil, "", true, clog6)
-	otherContact, _ := contactForURN(ctx, ts.b, channel.OrgID_, channel, newURN, nil, "", true, clog6)
-
-	ts.NoError(tx.Commit())
-
-	status = ts.b.NewStatusUpdate(channel, "019a25d9-4d3a-710c-8af6-897e0cb66a8e", models.MsgStatusSent, clog6)
-	status.SetURNUpdate(oldURN, newURN)
-
-	ts.NoError(ts.b.WriteStatusUpdate(ctx, status))
-
-	tx, _ = ts.b.rt.DB.BeginTxx(ctx, nil)
-	oldContactURN, _ = models.GetContactURNByIdentity(ctx, tx, channel.OrgID_, oldURN)
-	newContactURN, _ = models.GetContactURNByIdentity(ctx, tx, channel.OrgID_, newURN)
-
-	ts.Equal(oldContactURN.ContactID, models.NilContactID)
-	ts.Equal(newContactURN.ContactID, otherContact.ID_)
-	ts.NoError(tx.Commit())
 }
 
 func (ts *BackendTestSuite) TestSentExternalIDCaching() {
@@ -646,7 +564,7 @@ func (ts *BackendTestSuite) TestSentExternalIDCaching() {
 
 	// create a status update from a send which will have a UUID and an external ID
 	status1 := ts.b.NewStatusUpdate(channel, "0199df0f-9f82-7689-b02d-f34105991321", models.MsgStatusSent, clog)
-	status1.SetExternalID("ex457")
+	status1.SetExternalIdentifier("ex457")
 	err := ts.b.WriteStatusUpdate(ctx, status1)
 	ts.NoError(err)
 	ts.b.statusWriter.Flush()
@@ -657,7 +575,7 @@ func (ts *BackendTestSuite) TestSentExternalIDCaching() {
 	assertvk.HGetAll(ts.T(), rc, keys[0], map[string]string{"10|ex457": "0199df0f-9f82-7689-b02d-f34105991321"})
 
 	// mimic a delay in that status being written by reverting the db changes
-	ts.b.rt.DB.MustExec(`UPDATE msgs_msg SET status = 'W', external_id = NULL WHERE id = 10000`)
+	ts.b.rt.DB.MustExec(`UPDATE msgs_msg SET status = 'W', external_identifier = NULL WHERE id = 10000`)
 
 	// create a callback status update which only has external id
 	status2 := ts.b.NewStatusUpdateByExternalID(channel, "ex457", models.MsgStatusDelivered, clog)
@@ -668,11 +586,6 @@ func (ts *BackendTestSuite) TestSentExternalIDCaching() {
 
 	// msg status successfully updated in the database
 	assertdb.Query(ts.T(), ts.b.rt.DB, `SELECT status FROM msgs_msg WHERE id = 10000`).Returns("D")
-}
-
-func (ts *BackendTestSuite) TestHealth() {
-	// all should be well in test land
-	ts.Equal(ts.b.Health(), "")
 }
 
 func (ts *BackendTestSuite) TestCheckForDuplicate() {
@@ -753,34 +666,6 @@ func (ts *BackendTestSuite) TestCheckForDuplicate() {
 	ts.NotEqual(msg7.UUID(), msg9.UUID())
 }
 
-func (ts *BackendTestSuite) TestStatus() {
-	// our health should just contain the header
-	ts.True(strings.Contains(ts.b.Status(), "Channel"), ts.b.Status())
-
-	// add a message to our queue
-	r := ts.b.rt.VK.Get()
-	defer r.Close()
-
-	msgJSON := `[{
-		"org_id": 1,
-		"id": 10000,
-		"uuid": "0199df0f-9f82-7689-b02d-f34105991321",
-		"high_priority": true,
-		"text": "test message",
-		"contact": {"id": 100, "uuid": "a984069d-0008-4d8c-a772-b14a8a6acccc"},
-		"created_on": "2025-10-14T20:16:03.821434Z",
-		"channel_uuid": "dbc126ed-66bc-4e28-b67b-81dc3327c95d",
-		"urn": "tel:+12067799192",
-		"origin": "chat"
-	}]`
-
-	err := queue.PushOntoQueue(r, msgQueueName, "dbc126ed-66bc-4e28-b67b-81dc3327c95d", 10, string(msgJSON), queue.HighPriority)
-	ts.NoError(err)
-
-	// status should now contain that channel
-	ts.True(strings.Contains(ts.b.Status(), "1           0         0    10     KN   dbc126ed-66bc-4e28-b67b-81dc3327c95d"), ts.b.Status())
-}
-
 func (ts *BackendTestSuite) TestOutgoingQueue() {
 	// add one of our outgoing messages to the queue
 	ctx := context.Background()
@@ -817,7 +702,7 @@ func (ts *BackendTestSuite) TestOutgoingQueue() {
 	ts.Equal(msg.Text(), "test message")
 
 	// mark this message as dealt with
-	ts.b.OnSendComplete(ctx, msg, ts.b.NewStatusUpdate(msg.Channel(), msg.UUID(), models.MsgStatusWired, clog), clog, urns.NilURN)
+	ts.b.OnSendComplete(ctx, msg, ts.b.NewStatusUpdate(msg.Channel(), msg.UUID(), models.MsgStatusWired, clog), nil, clog)
 
 	// this message should now be marked as sent
 	sent, err := ts.b.WasMsgSent(ctx, msg.UUID())
@@ -946,16 +831,15 @@ func (ts *BackendTestSuite) TestWriteChanneLog() {
 		return dynamo.GetItem(ctx, ts.b.rt.Dynamo, ts.b.rt.Writers.Main.Table(), (&ChannelLog{clog}).DynamoKey())
 	}
 
-	httpx.SetRequestor(httpx.NewMockRequestor(map[string][]*httpx.MockResponse{
+	httpClient := &http.Client{Transport: httpx.WithMocks(nil, map[string][]*httpx.MockResponse{
 		"https://api.messages.com/send.json": {
 			httpx.NewMockResponse(200, nil, []byte(`{"status":"success"}`)),
 		},
-	}))
-	defer httpx.SetRequestor(httpx.DefaultRequestor)
+	})}
 
 	// make a request that will have a response
 	req, _ := http.NewRequest("POST", "https://api.messages.com/send.json", nil)
-	trace, err := httpx.DoTrace(http.DefaultClient, req, nil, nil, 0)
+	trace, _, err := utils.TraceHTTP(httpClient, req, 0)
 	ts.NoError(err)
 
 	clog1 := courier.NewChannelLog(courier.ChannelLogTypeTokenRefresh, channel, nil)
@@ -993,45 +877,7 @@ func (ts *BackendTestSuite) TestWriteChanneLog() {
 	ts.NoError(err)
 	ts.Equal("msg_send", item2.Data["type"])
 
-	// channel channel log policy to only write errors
-	channel.LogPolicy = models.LogPolicyErrors
-
-	clog3 := courier.NewChannelLog(courier.ChannelLogTypeMsgSend, channel, nil)
-	clog3.HTTP(trace)
-	ts.NoError(ts.b.WriteChannelLog(ctx, clog3))
-
-	time.Sleep(time.Second) // give writer time to.. not write this
-
-	item3, err := getClogFromDynamo(clog3)
-	ts.NoError(err)
-	ts.Nil(item3)
-
-	clog4 := courier.NewChannelLog(courier.ChannelLogTypeMsgSend, channel, nil)
-	clog4.HTTP(trace)
-	clog4.Error(courier.ErrorResponseStatusCode())
-	ts.NoError(ts.b.WriteChannelLog(ctx, clog4))
-
-	time.Sleep(time.Second) // give writer time to write this because it's an error
-
-	item4, err := getClogFromDynamo(clog4)
-	ts.NoError(err)
-	ts.NotNil(item4)
-
-	// channel channel log policy to discard all
-	channel.LogPolicy = models.LogPolicyNone
-
-	clog5 := courier.NewChannelLog(courier.ChannelLogTypeMsgSend, channel, nil)
-	clog5.HTTP(trace)
-	clog5.Error(courier.ErrorResponseStatusCode())
-	ts.NoError(ts.b.WriteChannelLog(ctx, clog5))
-
-	time.Sleep(time.Second) // give writer time to.. not write this
-
-	item5, err := getClogFromDynamo(clog5)
-	ts.NoError(err)
-	ts.Nil(item5)
-
-	dyntest.AssertCount(ts.T(), ts.b.rt.Dynamo, ts.b.rt.Writers.Main.Table(), 3)
+	dyntest.AssertCount(ts.T(), ts.b.rt.Dynamo, ts.b.rt.Writers.Main.Table(), 2)
 }
 
 func (ts *BackendTestSuite) TestSaveAttachment() {
@@ -1079,6 +925,7 @@ func (ts *BackendTestSuite) TestWriteMsg() {
 
 	tx, err := ts.b.rt.DB.Beginx()
 	ts.NoError(err)
+	defer tx.Rollback()
 
 	// load our URN
 	contactURN, err := models.GetOrCreateContactURN(ctx, tx, knChannel, m.ContactID, urn, nil)
@@ -1091,7 +938,7 @@ func (ts *BackendTestSuite) TestWriteMsg() {
 	ts.Equal(knChannel.OrgID_, m.OrgID)
 	ts.Equal(contactURN.ContactID, m.ContactID)
 	ts.Equal(contactURN.ID, m.ContactURNID)
-	ts.Equal("ext123", string(m.ExternalID))
+	ts.Equal("ext123", string(m.ExternalIdentifier))
 	ts.Equal("test-write", m.Text)
 	ts.Equal(0, len(m.Attachments))
 	ts.Equal(now, m.SentOn.In(time.UTC))
@@ -1138,6 +985,26 @@ func (ts *BackendTestSuite) TestWriteMsg() {
 		"text":            msg6.Text(),
 		"attachments":     nil,
 		"new_contact":     contact.IsNew_,
+	})
+
+	testsuite.ResetValkey(ts.T(), ts.b.rt)
+
+	// check that msg with new_urn is queued with that field included
+	msg7 := ts.b.NewIncomingMsg(ctx, knChannel, urn, "hello with new urn", "", clog).(*MsgIn)
+	msg7.WithNewURN(urns.URN("tel:+12065559999"), models.NewURNAppend)
+	err = ts.b.WriteMsg(ctx, msg7, clog)
+	ts.NoError(err)
+
+	ts.assertQueuedContactTask(msg7.ContactID_, "msg_received", map[string]any{
+		"channel_id":      float64(10),
+		"msg_uuid":        string(msg7.UUID()),
+		"msg_external_id": msg7.ExternalID(),
+		"urn":             msg7.URN().String(),
+		"urn_id":          float64(msg7.ContactURNID_),
+		"text":            msg7.Text(),
+		"attachments":     nil,
+		"new_contact":     contact.IsNew_,
+		"new_urn":         map[string]any{"value": "tel:+12065559999", "action": "append"},
 	})
 }
 
@@ -1208,6 +1075,7 @@ func (ts *BackendTestSuite) TestPreferredChannelCheckRole() {
 
 	tx, err := ts.b.rt.DB.Beginx()
 	ts.NoError(err)
+	defer tx.Rollback()
 
 	// load our URN
 	exContactURN, err := models.GetOrCreateContactURN(ctx, tx, exChannel, m.ContactID, urn, nil)
@@ -1237,6 +1105,16 @@ func (ts *BackendTestSuite) TestChannelEvent() {
 	ts.Equal(null.Map[string](map[string]string{"ref_id": "12345"}), dbE.Extra)
 	ts.Equal(contact.ID_, dbE.ContactID)
 	ts.Equal(contact.URNID_, dbE.ContactURNID)
+
+	ts.assertQueuedContactTask(contact.ID_, "event_received", map[string]any{
+		"event_uuid":  string(event.UUID()),
+		"event_type":  "referral",
+		"channel_id":  float64(10),
+		"urn_id":      float64(contact.URNID_),
+		"extra":       map[string]any{"ref_id": "12345"},
+		"new_contact": true,
+		"occurred_on": event.OccurredOn().Format(time.RFC3339Nano),
+	})
 
 	event = ts.b.NewChannelEvent(channel, models.EventTypeOptIn, urn, clog).WithExtra(map[string]string{"title": "Polls", "payload": "1"})
 	err = ts.b.WriteChannelEvent(ctx, event, clog)
@@ -1301,17 +1179,22 @@ func (ts *BackendTestSuite) TestSessionTimeout() {
 func (ts *BackendTestSuite) TestMailroomEvents() {
 	ctx := context.Background()
 
+	testsuite.ResetDB(ts.T(), ts.b.rt)
 	testsuite.ResetValkey(ts.T(), ts.b.rt)
 
 	channel := ts.getChannel("KN", "dbc126ed-66bc-4e28-b67b-81dc3327c95d")
 	clog := courier.NewChannelLog(courier.ChannelLogTypeUnknown, channel, nil)
 	urn := urns.URN("tel:+12065551616")
 
+	// ensure contact exists before event write so new_contact is false
+	_, err := contactForURN(ctx, ts.b, channel.OrgID_, channel, urn, nil, "kermit frog", true, clog)
+	ts.NoError(err)
+
 	event := ts.b.NewChannelEvent(channel, models.EventTypeReferral, urn, clog).
 		WithExtra(map[string]string{"ref_id": "12345"}).
 		WithContactName("kermit frog").
 		WithOccurredOn(time.Date(2020, 8, 5, 13, 30, 0, 123456789, time.UTC))
-	err := ts.b.WriteChannelEvent(ctx, event, clog)
+	err = ts.b.WriteChannelEvent(ctx, event, clog)
 	ts.NoError(err)
 
 	contact, err := contactForURN(ctx, ts.b, channel.OrgID_, channel, urn, nil, "", true, clog)
@@ -1332,7 +1215,7 @@ func (ts *BackendTestSuite) TestMailroomEvents() {
 		"urn_id":      float64(contact.URNID_),
 		"extra":       map[string]any{"ref_id": "12345"},
 		"new_contact": false,
-		"occurred_on": "2020-08-05T13:30:00.123456789Z",
+		"occurred_on": event.OccurredOn().Format(time.RFC3339Nano),
 	})
 }
 
@@ -1464,11 +1347,9 @@ func (ts *BackendTestSuite) assertQueuedContactTask(contactID models.ContactID, 
 	data, err := redis.Bytes(rc.Do("LPOP", fmt.Sprintf("c:1:%d", contactID)))
 	ts.NoError(err)
 
-	// created_on is usually DB time so exclude it from task body comparison
-	data = jsonparser.Delete(data, "task", "created_on")
-
 	var body map[string]any
 	jsonx.MustUnmarshal(data, &body)
+
 	ts.Equal(expectedType, body["type"])
 	ts.Equal(expectedBody, body["task"])
 }

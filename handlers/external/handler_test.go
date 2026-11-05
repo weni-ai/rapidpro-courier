@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nyaruka/courier"
-	"github.com/nyaruka/courier/core/models"
-	. "github.com/nyaruka/courier/handlers"
-	"github.com/nyaruka/courier/test"
+	"github.com/nyaruka/courier/v26"
+	"github.com/nyaruka/courier/v26/core/models"
+	. "github.com/nyaruka/courier/v26/handlers"
+	"github.com/nyaruka/courier/v26/test"
 	"github.com/nyaruka/gocommon/httpx"
 	"github.com/nyaruka/gocommon/urns"
 )
@@ -309,7 +309,7 @@ var longSendTestCases = []OutgoingTestCase{
 	{
 		Label:   "Long Send",
 		MsgText: "This is a long message that will be longer than 30....... characters", MsgURN: "tel:+250788383383",
-		MsgQuickReplies: []models.QuickReply{{Text: "One"}},
+		MsgQuickReplies: []models.QuickReply{{Type: "text", Text: "One"}},
 		MockResponses: map[string][]*httpx.MockResponse{
 			"http://example.com/send*": {
 				httpx.NewMockResponse(200, nil, []byte(`0: Accepted for delivery`)),
@@ -623,7 +623,7 @@ var jsonSendTestCases = []OutgoingTestCase{
 		Label:           "Send Quick Replies",
 		MsgText:         "Some message",
 		MsgURN:          "tel:+250788383383",
-		MsgQuickReplies: []models.QuickReply{{Text: "One"}, {Text: "Two"}, {Text: "Three"}},
+		MsgQuickReplies: []models.QuickReply{{Type: "text", Text: "One"}, {Type: "text", Text: "Two"}, {Type: "text", Text: "Three"}},
 		MockResponses: map[string][]*httpx.MockResponse{
 			"http://example.com/send": {
 				httpx.NewMockResponse(200, nil, []byte(`0: Accepted for delivery`)),
@@ -641,7 +641,7 @@ var jsonLongSendTestCases = []OutgoingTestCase{
 		Label:           "Send Long message JSON",
 		MsgText:         "This is a long message that will be longer than 30....... characters",
 		MsgURN:          "tel:+250788383383",
-		MsgQuickReplies: []models.QuickReply{{Text: "One"}, {Text: "Two"}, {Text: "Three"}},
+		MsgQuickReplies: []models.QuickReply{{Type: "text", Text: "One"}, {Type: "text", Text: "Two"}, {Type: "text", Text: "Three"}},
 		MockResponses: map[string][]*httpx.MockResponse{
 			"*": {
 				httpx.NewMockResponse(200, nil, []byte(`0: Accepted for delivery`)),
@@ -729,7 +729,7 @@ var xmlSendTestCases = []OutgoingTestCase{
 		Label:           "Send Quick Replies",
 		MsgText:         "Some message",
 		MsgURN:          "tel:+250788383383",
-		MsgQuickReplies: []models.QuickReply{{Text: "One"}, {Text: "Two"}, {Text: "Three"}},
+		MsgQuickReplies: []models.QuickReply{{Type: "text", Text: "One"}, {Type: "text", Text: "Two"}, {Type: "text", Text: "Three"}},
 		MockResponses: map[string][]*httpx.MockResponse{
 			"http://example.com/send": {
 				httpx.NewMockResponse(200, nil, []byte(`0: Accepted for delivery`)),
@@ -747,7 +747,7 @@ var xmlLongSendTestCases = []OutgoingTestCase{
 		Label:           "Send Long message XML",
 		MsgText:         "This is a long message that will be longer than 30....... characters",
 		MsgURN:          "tel:+250788383383",
-		MsgQuickReplies: []models.QuickReply{{Text: "One"}, {Text: "Two"}, {Text: "Three"}},
+		MsgQuickReplies: []models.QuickReply{{Type: "text", Text: "One"}, {Type: "text", Text: "Two"}, {Type: "text", Text: "Three"}},
 		MockResponses: map[string][]*httpx.MockResponse{
 			"*": {
 				httpx.NewMockResponse(200, nil, []byte(`0: Accepted for delivery`)),
@@ -851,7 +851,7 @@ var xmlSendWithResponseContentTestCases = []OutgoingTestCase{
 		Label:           "Send Quick Replies",
 		MsgText:         "Some message",
 		MsgURN:          "tel:+250788383383",
-		MsgQuickReplies: []models.QuickReply{{Text: "One"}, {Text: "Two"}, {Text: "Three"}},
+		MsgQuickReplies: []models.QuickReply{{Type: "text", Text: "One"}, {Type: "text", Text: "Two"}, {Type: "text", Text: "Three"}},
 		MockResponses: map[string][]*httpx.MockResponse{
 			"http://example.com/send": {
 				httpx.NewMockResponse(200, nil, []byte(`<return>0</return>`)),

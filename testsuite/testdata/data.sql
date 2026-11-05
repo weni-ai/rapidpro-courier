@@ -10,26 +10,26 @@ INSERT INTO orgs_org("id", "name", "language", "is_anon", "config")
 
 /* Channel with id 10, 11, 12 */
 DELETE FROM channels_channel;
-INSERT INTO channels_channel("id", "schemes", "is_active", "created_on", "modified_on", "uuid", "channel_type", "address", "org_id", "country", "role", "log_policy", "config")
-                      VALUES('10', '{"tel"}', 'Y', NOW(), NOW(), 'dbc126ed-66bc-4e28-b67b-81dc3327c95d', 'KN', '2500', 1, 'RW', 'SR', 'A', '{ "encoding": "smart", "use_national": true, "max_length_int": 320, "max_length_str": "320" }');
+INSERT INTO channels_channel("id", "schemes", "is_active", "created_on", "modified_on", "uuid", "channel_type", "address", "org_id", "country", "role", "config")
+                      VALUES('10', '{"tel"}', 'Y', NOW(), NOW(), 'dbc126ed-66bc-4e28-b67b-81dc3327c95d', 'KN', '2500', 1, 'RW', 'SR', '{ "encoding": "smart", "use_national": true, "max_length_int": 320, "max_length_str": "320" }');
 
-INSERT INTO channels_channel("id", "schemes", "is_active", "created_on", "modified_on", "uuid", "channel_type", "address", "org_id", "country", "role", "log_policy", "config")
-                      VALUES('11', '{"tel"}', 'Y', NOW(), NOW(), 'dbc126ed-66bc-4e28-b67b-81dc3327c96a', 'FBA', '4500', 1, 'US', 'SR', 'A', '{}');
+INSERT INTO channels_channel("id", "schemes", "is_active", "created_on", "modified_on", "uuid", "channel_type", "address", "org_id", "country", "role", "config")
+                      VALUES('11', '{"tel"}', 'Y', NOW(), NOW(), 'dbc126ed-66bc-4e28-b67b-81dc3327c96a', 'FBA', '4500', 1, 'US', 'SR', '{}');
 
-INSERT INTO channels_channel("id", "schemes", "is_active", "created_on", "modified_on", "uuid", "channel_type", "address", "org_id", "country", "role", "log_policy", "config")
-                      VALUES('12', '{"tel"}', 'Y', NOW(), NOW(), 'dbc126ed-66bc-4e28-b67b-81dc3327c97a', 'DM', '4500', 1, 'US', 'SR', 'A', '{}');
+INSERT INTO channels_channel("id", "schemes", "is_active", "created_on", "modified_on", "uuid", "channel_type", "address", "org_id", "country", "role", "config")
+                      VALUES('12', '{"tel"}', 'Y', NOW(), NOW(), 'dbc126ed-66bc-4e28-b67b-81dc3327c97a', 'DM', '4500', 1, 'US', 'SR', '{}');
 
-INSERT INTO channels_channel("id", "schemes", "is_active", "created_on", "modified_on", "uuid", "channel_type", "address", "org_id", "country", "role", "log_policy", "config")
-                      VALUES('13', '{"telegram"}', 'Y', NOW(), NOW(), 'dbc126ed-66bc-4e28-b67b-81dc3327c98a', 'TG', 'courierbot', 1, NULL, 'SR', 'A', '{}');
+INSERT INTO channels_channel("id", "schemes", "is_active", "created_on", "modified_on", "uuid", "channel_type", "address", "org_id", "country", "role", "config")
+                      VALUES('13', '{"telegram"}', 'Y', NOW(), NOW(), 'dbc126ed-66bc-4e28-b67b-81dc3327c98a', 'TG', 'courierbot', 1, NULL, 'SR', '{}');
 
-INSERT INTO channels_channel("id", "schemes", "is_active", "created_on", "modified_on", "uuid", "channel_type", "address", "org_id", "country", "role", "log_policy", "config")
-                      VALUES('14', '{"tel"}', 'Y', NOW(), NOW(), 'dbc126ed-66bc-4e28-b67b-81dc3327c99a', 'KN', NULL, 1, 'US', 'SR', 'A', '{}');
+INSERT INTO channels_channel("id", "schemes", "is_active", "created_on", "modified_on", "uuid", "channel_type", "address", "org_id", "country", "role", "config")
+                      VALUES('14', '{"tel"}', 'Y', NOW(), NOW(), 'dbc126ed-66bc-4e28-b67b-81dc3327c99a', 'KN', NULL, 1, 'US', 'SR', '{}');
 
-INSERT INTO channels_channel("id", "schemes", "is_active", "created_on", "modified_on", "uuid", "channel_type", "address", "org_id", "country", "role", "log_policy", "config")
-                      VALUES('15', '{"tel"}', 'Y', NOW(), NOW(), 'dbc126ed-66bc-4e28-b67b-81dc3327100a', 'EX', NULL, 1, 'US', 'R', 'A', '{}');
+INSERT INTO channels_channel("id", "schemes", "is_active", "created_on", "modified_on", "uuid", "channel_type", "address", "org_id", "country", "role", "config")
+                      VALUES('15', '{"tel"}', 'Y', NOW(), NOW(), 'dbc126ed-66bc-4e28-b67b-81dc3327100a', 'EX', NULL, 1, 'US', 'R', '{}');
 
-INSERT INTO channels_channel("id", "schemes", "is_active", "created_on", "modified_on", "uuid", "channel_type", "address", "org_id", "country", "role", "log_policy", "config")
-                      VALUES('16', '{"tel"}', 'Y', NOW(), NOW(), 'dbc126ed-66bc-4e28-b67b-81dc3327222a', 'EX', NULL, 1, 'US', '', 'A', '{}');
+INSERT INTO channels_channel("id", "schemes", "is_active", "created_on", "modified_on", "uuid", "channel_type", "address", "org_id", "country", "role", "config")
+                      VALUES('16', '{"tel"}', 'Y', NOW(), NOW(), 'dbc126ed-66bc-4e28-b67b-81dc3327222a', 'EX', NULL, 1, 'US', '', '{}');
 
 /* Contacts with ids 100, 101 */
 DELETE FROM contacts_contact;
@@ -50,19 +50,29 @@ INSERT INTO msgs_optin(id, uuid, org_id, name) VALUES
 /** Msg with id 10000 */
 DELETE FROM msgs_msg;
 INSERT INTO msgs_msg("id", "uuid", "text", "high_priority", "created_on", "modified_on", "sent_on", "direction", "status", "visibility", "msg_type", "is_android",
-                        "msg_count", "error_count", "next_attempt", "external_id", "channel_id", "contact_id", "contact_urn_id", "org_id")
+                        "msg_count", "error_count", "next_attempt", "external_identifier", "channel_id", "contact_id", "contact_urn_id", "org_id")
               VALUES(10000, '0199df0f-9f82-7689-b02d-f34105991321', 'test message', True, now(), now(), now(), 'O', 'W', 'V', 'T', FALSE,
                      1, 0, now(), 'ext1', 10, 100, 1000, 1);
 
 INSERT INTO msgs_msg("id", "uuid", "text", "high_priority", "created_on", "modified_on", "sent_on", "direction", "status", "visibility", "msg_type", "is_android",
-                        "msg_count", "error_count", "next_attempt", "external_id", "channel_id", "contact_id", "contact_urn_id", "org_id")
+                        "msg_count", "error_count", "next_attempt", "external_identifier", "channel_id", "contact_id", "contact_urn_id", "org_id")
               VALUES(10001, '0199df10-10dc-7e6e-834b-3d959ece93b2', 'test message without external', True, now(), now(), now(), 'O', 'W', 'V', 'T', FALSE,
                      1, 0, now(), '', 10, 100, 1000, 1);
 
 INSERT INTO msgs_msg("id", "uuid", "text", "high_priority", "created_on", "modified_on", "sent_on", "direction", "status", "visibility", "msg_type", "is_android",
-                        "msg_count", "error_count", "next_attempt", "external_id", "channel_id", "contact_id", "contact_urn_id", "org_id")
+                        "msg_count", "error_count", "next_attempt", "external_identifier", "channel_id", "contact_id", "contact_urn_id", "org_id")
               VALUES(10002, '0199df10-9519-7fe2-a29c-c890d1713673', 'test message incoming', True, now(), now(), now(), 'I', 'P', 'V', 'T', FALSE,
                      1, 0, now(), 'ext2', 10, 100, 1000, 1);
+
+INSERT INTO msgs_msg("id", "uuid", "text", "high_priority", "created_on", "modified_on", "sent_on", "direction", "status", "visibility", "msg_type", "is_android",
+                        "msg_count", "error_count", "next_attempt", "external_identifier", "channel_id", "contact_id", "contact_urn_id", "org_id")
+              VALUES(10003, '019bb1ca-a92d-78f5-ba61-06aa62f2b41a', 'test message incoming', True, now(), now(), now(), 'I', 'P', 'V', 'T', FALSE,
+                     1, 0, now(), 'ext3', 10, 100, 1000, 1);
+
+INSERT INTO msgs_msg("id", "uuid", "text", "high_priority", "created_on", "modified_on", "sent_on", "direction", "status", "visibility", "msg_type", "is_android",
+                        "msg_count", "error_count", "next_attempt", "external_identifier", "channel_id", "contact_id", "contact_urn_id", "org_id")
+              VALUES(10005, '019bb29e-b2c6-7e5f-b980-ccb3e9e21fbc', 'test message outgoing', True, now(), now(), now(), 'O', 'W', 'V', 'T', FALSE,
+                     1, 0, now(), 'ext4', 10, 100, 1000, 1);
 
 INSERT INTO msgs_media("id", "uuid", "org_id", "content_type", "url", "path", "size", "duration", "width", "height", "original_id")
                 VALUES(100, 'ec6972be-809c-4c8d-be59-ba9dbd74c977', 1, 'image/jpeg', 'http://nyaruka.s3.com/orgs/1/media/ec69/ec6972be-809c-4c8d-be59-ba9dbd74c977/test.jpg', '/orgs/1/media/ec69/ec6972be-809c-4c8d-be59-ba9dbd74c977/test.jpg', 123, 0, 1024, 768, NULL);

@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nyaruka/courier"
-	"github.com/nyaruka/courier/core/models"
-	. "github.com/nyaruka/courier/handlers"
-	"github.com/nyaruka/courier/runtime"
-	"github.com/nyaruka/courier/test"
+	"github.com/nyaruka/courier/v26"
+	"github.com/nyaruka/courier/v26/core/models"
+	. "github.com/nyaruka/courier/v26/handlers"
+	"github.com/nyaruka/courier/v26/runtime"
+	"github.com/nyaruka/courier/v26/test"
 	"github.com/nyaruka/gocommon/httpx"
 	"github.com/nyaruka/gocommon/urns"
 	"github.com/stretchr/testify/assert"
@@ -550,16 +550,6 @@ var testCases = []IncomingTestCase{
 		ExpectedDate:         time.Date(2016, 4, 7, 1, 11, 27, 970000000, time.UTC),
 	},
 	{
-		Label:                "Receive OptIn UserRef",
-		URL:                  receiveURL,
-		Data:                 optInUserRef,
-		ExpectedRespStatus:   200,
-		ExpectedBodyContains: "Handled",
-		ExpectedEvents: []ExpectedEvent{
-			{Type: models.EventTypeReferral, URN: "facebook:ref:optin_user_ref", Time: time.Date(2016, 4, 7, 1, 11, 27, 970000000, time.UTC), Extra: map[string]string{"referrer_id": "optin_ref"}},
-		},
-	},
-	{
 		Label:                "Receive OptIn",
 		URL:                  receiveURL,
 		Data:                 optIn,
@@ -706,7 +696,7 @@ func TestDescribeURN(t *testing.T) {
 
 	channel := testChannels[0]
 	handler := newHandler()
-	handler.Initialize(test.NewMockServer(runtime.NewDefaultConfig(), test.NewMockBackend()))
+	handler.Initialize(courier.NewServer(runtime.NewTestRuntime(runtime.NewDefaultConfig()), test.NewMockBackend()))
 	clog := courier.NewChannelLog(courier.ChannelLogTypeUnknown, channel, handler.RedactValues(channel))
 
 	tcs := []struct {
@@ -715,7 +705,6 @@ func TestDescribeURN(t *testing.T) {
 	}{
 		{"facebook:1337", map[string]string{"name": "John Doe"}},
 		{"facebook:4567", map[string]string{"name": ""}},
-		{"facebook:ref:1337", map[string]string{}},
 	}
 
 	for _, tc := range tcs {
@@ -832,28 +821,10 @@ var defaultSendTestCases = []OutgoingTestCase{
 		ExpectedExtIDs: []string{"mid.133"},
 	},
 	{
-		Label:   "Plain Send using ref URN",
-		MsgText: "Simple Message",
-		MsgURN:  "facebook:ref:67890",
-		MockResponses: map[string][]*httpx.MockResponse{
-			"https://graph.facebook.com/v3.3/me/messages*": {
-				httpx.NewMockResponse(200, nil, []byte(`{"message_id": "mid.133", "recipient_id": "12345"}`)),
-			},
-		},
-		ExpectedRequests: []ExpectedRequest{{
-			Params: url.Values{
-				"access_token": {"access_token"},
-			},
-			Body: `{"messaging_type":"NON_PROMOTIONAL_SUBSCRIPTION","recipient":{"user_ref":"67890"},"message":{"text":"Simple Message"}}`,
-		}},
-		ExpectedContactURNs: map[string]bool{"facebook:12345": true, "ext:67890": true, "facebook:ref:67890": false},
-		ExpectedExtIDs:      []string{"mid.133"},
-	},
-	{
 		Label:           "Quick Reply",
 		MsgText:         "Are you happy?",
 		MsgURN:          "facebook:12345",
-		MsgQuickReplies: []models.QuickReply{{Text: "Yes"}, {Text: "No"}},
+		MsgQuickReplies: []models.QuickReply{{Type: "text", Text: "Yes"}, {Type: "text", Text: "No"}},
 		MockResponses: map[string][]*httpx.MockResponse{
 			"https://graph.facebook.com/v3.3/me/messages*": {
 				httpx.NewMockResponse(200, nil, []byte(`{"message_id": "mid.133"}`)),
@@ -871,7 +842,7 @@ var defaultSendTestCases = []OutgoingTestCase{
 		Label:           "Long Message",
 		MsgText:         "This is a long message which spans more than one part, what will actually be sent in the end if we exceed the max length?",
 		MsgURN:          "facebook:12345",
-		MsgQuickReplies: []models.QuickReply{{Text: "Yes"}, {Text: "No"}},
+		MsgQuickReplies: []models.QuickReply{{Type: "text", Text: "Yes"}, {Type: "text", Text: "No"}},
 		MockResponses: map[string][]*httpx.MockResponse{
 			"https://graph.facebook.com/v3.3/me/messages*": {
 				httpx.NewMockResponse(200, nil, []byte(`{"message_id": "mid.133"}`)),
@@ -916,7 +887,7 @@ var defaultSendTestCases = []OutgoingTestCase{
 		MsgText:         "This is some text.",
 		MsgURN:          "facebook:12345",
 		MsgAttachments:  []string{"image/jpeg:https://foo.bar/image.jpg"},
-		MsgQuickReplies: []models.QuickReply{{Text: "Yes"}, {Text: "No"}},
+		MsgQuickReplies: []models.QuickReply{{Type: "text", Text: "Yes"}, {Type: "text", Text: "No"}},
 		MockResponses: map[string][]*httpx.MockResponse{
 			"https://graph.facebook.com/v3.3/me/messages*": {
 				httpx.NewMockResponse(200, nil, []byte(`{"message_id": "mid.133"}`)),

@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nyaruka/courier"
-	"github.com/nyaruka/courier/core/models"
-	. "github.com/nyaruka/courier/handlers"
-	"github.com/nyaruka/courier/runtime"
-	"github.com/nyaruka/courier/test"
+	"github.com/nyaruka/courier/v26"
+	"github.com/nyaruka/courier/v26/core/models"
+	. "github.com/nyaruka/courier/v26/handlers"
+	"github.com/nyaruka/courier/v26/runtime"
+	"github.com/nyaruka/courier/v26/test"
 	"github.com/nyaruka/gocommon/httpx"
 	"github.com/nyaruka/gocommon/urns"
 	"github.com/stretchr/testify/assert"
@@ -192,7 +192,7 @@ var instagramOutgoingTests = []OutgoingTestCase{
 		MsgURN:    "instagram:12345",
 		MsgOrigin: models.MsgOriginChat,
 		MockResponses: map[string][]*httpx.MockResponse{
-			"https://graph.facebook.com/v18.0/me/messages*": {
+			"https://graph.facebook.com/v22.0/me/messages*": {
 				httpx.NewMockResponse(200, nil, []byte(`{"message_id": "mid.133"}`)),
 			},
 		},
@@ -208,7 +208,7 @@ var instagramOutgoingTests = []OutgoingTestCase{
 		MsgURN:    "instagram:12345",
 		MsgOrigin: models.MsgOriginBroadcast,
 		MockResponses: map[string][]*httpx.MockResponse{
-			"https://graph.facebook.com/v18.0/me/messages*": {
+			"https://graph.facebook.com/v22.0/me/messages*": {
 				httpx.NewMockResponse(200, nil, []byte(`{"message_id": "mid.133"}`)),
 			},
 		},
@@ -225,7 +225,7 @@ var instagramOutgoingTests = []OutgoingTestCase{
 		MsgOrigin:               models.MsgOriginFlow,
 		MsgResponseToExternalID: "23526",
 		MockResponses: map[string][]*httpx.MockResponse{
-			"https://graph.facebook.com/v18.0/me/messages*": {
+			"https://graph.facebook.com/v22.0/me/messages*": {
 				httpx.NewMockResponse(200, nil, []byte(`{"message_id": "mid.133"}`)),
 			},
 		},
@@ -240,9 +240,9 @@ var instagramOutgoingTests = []OutgoingTestCase{
 		MsgText:         "Are you happy?",
 		MsgURN:          "instagram:12345",
 		MsgOrigin:       models.MsgOriginBroadcast,
-		MsgQuickReplies: []models.QuickReply{{Text: "Yes"}, {Text: "No"}},
+		MsgQuickReplies: []models.QuickReply{{Type: "text", Text: "Yes"}, {Type: "text", Text: "No"}},
 		MockResponses: map[string][]*httpx.MockResponse{
-			"https://graph.facebook.com/v18.0/me/messages*": {
+			"https://graph.facebook.com/v22.0/me/messages*": {
 				httpx.NewMockResponse(200, nil, []byte(`{"message_id": "mid.133"}`)),
 			},
 		},
@@ -256,9 +256,9 @@ var instagramOutgoingTests = []OutgoingTestCase{
 		Label:           "Message that exceeds max text length",
 		MsgText:         "This is a long message which spans more than one part, what will actually be sent in the end if we exceed the max length?",
 		MsgURN:          "instagram:12345",
-		MsgQuickReplies: []models.QuickReply{{Text: "Yes"}, {Text: "No"}},
+		MsgQuickReplies: []models.QuickReply{{Type: "text", Text: "Yes"}, {Type: "text", Text: "No"}},
 		MockResponses: map[string][]*httpx.MockResponse{
-			"https://graph.facebook.com/v18.0/me/messages*": {
+			"https://graph.facebook.com/v22.0/me/messages*": {
 				httpx.NewMockResponse(200, nil, []byte(`{"message_id": "mid.133"}`)),
 				httpx.NewMockResponse(200, nil, []byte(`{"message_id": "mid.133"}`)),
 			},
@@ -280,7 +280,7 @@ var instagramOutgoingTests = []OutgoingTestCase{
 		MsgURN:         "instagram:12345",
 		MsgAttachments: []string{"image/jpeg:https://foo.bar/image.jpg"},
 		MockResponses: map[string][]*httpx.MockResponse{
-			"https://graph.facebook.com/v18.0/me/messages*": {
+			"https://graph.facebook.com/v22.0/me/messages*": {
 				httpx.NewMockResponse(200, nil, []byte(`{"message_id": "mid.133"}`)),
 			},
 		},
@@ -295,9 +295,9 @@ var instagramOutgoingTests = []OutgoingTestCase{
 		MsgText:         "This is some text.",
 		MsgURN:          "instagram:12345",
 		MsgAttachments:  []string{"image/jpeg:https://foo.bar/image.jpg"},
-		MsgQuickReplies: []models.QuickReply{{Text: "Yes"}, {Text: "No"}},
+		MsgQuickReplies: []models.QuickReply{{Type: "text", Text: "Yes"}, {Type: "text", Text: "No"}},
 		MockResponses: map[string][]*httpx.MockResponse{
-			"https://graph.facebook.com/v18.0/me/messages*": {
+			"https://graph.facebook.com/v22.0/me/messages*": {
 				httpx.NewMockResponse(200, nil, []byte(`{"message_id": "mid.133"}`)),
 				httpx.NewMockResponse(200, nil, []byte(`{"message_id": "mid.133"}`)),
 			},
@@ -319,7 +319,7 @@ var instagramOutgoingTests = []OutgoingTestCase{
 		MsgText: "Simple Message",
 		MsgURN:  "instagram:12345",
 		MockResponses: map[string][]*httpx.MockResponse{
-			"https://graph.facebook.com/v18.0/me/messages*": {
+			"https://graph.facebook.com/v22.0/me/messages*": {
 				httpx.NewMockResponse(200, nil, []byte(`{"message_id": "mid.133"}`)),
 			},
 		},
@@ -334,7 +334,7 @@ var instagramOutgoingTests = []OutgoingTestCase{
 		MsgURN:         "instagram:12345",
 		MsgAttachments: []string{"application/pdf:https://foo.bar/document.pdf"},
 		MockResponses: map[string][]*httpx.MockResponse{
-			"https://graph.facebook.com/v18.0/me/messages*": {
+			"https://graph.facebook.com/v22.0/me/messages*": {
 				httpx.NewMockResponse(200, nil, []byte(`{"message_id": "mid.133"}`)),
 			},
 		},
@@ -349,7 +349,7 @@ var instagramOutgoingTests = []OutgoingTestCase{
 		MsgText: "ID Error",
 		MsgURN:  "instagram:12345",
 		MockResponses: map[string][]*httpx.MockResponse{
-			"https://graph.facebook.com/v18.0/me/messages*": {
+			"https://graph.facebook.com/v22.0/me/messages*": {
 				httpx.NewMockResponse(200, nil, []byte(`{ "is_error": true }`)),
 			},
 		},
@@ -360,7 +360,7 @@ var instagramOutgoingTests = []OutgoingTestCase{
 		MsgText: "Error",
 		MsgURN:  "instagram:12345",
 		MockResponses: map[string][]*httpx.MockResponse{
-			"https://graph.facebook.com/v18.0/me/messages*": {
+			"https://graph.facebook.com/v22.0/me/messages*": {
 				httpx.NewMockResponse(403, nil, []byte(`{ "is_error": true }`)),
 			},
 		},
@@ -371,7 +371,7 @@ var instagramOutgoingTests = []OutgoingTestCase{
 		MsgText: "Error",
 		MsgURN:  "instagram:12345",
 		MockResponses: map[string][]*httpx.MockResponse{
-			"https://graph.facebook.com/v18.0/me/messages*": {
+			"https://graph.facebook.com/v22.0/me/messages*": {
 				httpx.NewMockResponse(200, nil, []byte(`bad json`)),
 			},
 		},
@@ -382,7 +382,7 @@ var instagramOutgoingTests = []OutgoingTestCase{
 		MsgText: "Error",
 		MsgURN:  "instagram:12345",
 		MockResponses: map[string][]*httpx.MockResponse{
-			"https://graph.facebook.com/v18.0/me/messages*": {
+			"https://graph.facebook.com/v22.0/me/messages*": {
 				httpx.NewMockResponse(200, nil, []byte(`{ "error": {"message": "The image size is too large.","code": 36000 }}`)),
 			},
 		},
@@ -449,7 +449,7 @@ func TestInstagramDescribeURN(t *testing.T) {
 
 	channel := instgramTestChannels[0]
 	handler := newHandler("IG", "Instagram")
-	handler.Initialize(test.NewMockServer(runtime.NewDefaultConfig(), test.NewMockBackend()))
+	handler.Initialize(courier.NewServer(runtime.NewTestRuntime(runtime.NewDefaultConfig()), test.NewMockBackend()))
 	clog := courier.NewChannelLog(courier.ChannelLogTypeUnknown, channel, handler.RedactValues(channel))
 
 	tcs := []struct {
@@ -470,11 +470,11 @@ func TestInstagramDescribeURN(t *testing.T) {
 
 func TestInstagramBuildAttachmentRequest(t *testing.T) {
 	mb := test.NewMockBackend()
-	s := courier.NewServer(runtime.NewDefaultConfig(), mb)
+	s := courier.NewServer(runtime.NewTestRuntime(runtime.NewDefaultConfig()), mb)
 
 	handler := &handler{NewBaseHandler(models.ChannelType("IG"), "Instagram", DisableUUIDRouting())}
 	handler.Initialize(s)
-	req, _ := handler.BuildAttachmentRequest(context.Background(), mb, facebookTestChannels[0], "https://example.org/v1/media/41", nil)
+	req, _ := handler.BuildAttachmentRequest(context.Background(), facebookTestChannels[0], "https://example.org/v1/media/41", nil)
 	assert.Equal(t, "https://example.org/v1/media/41", req.URL.String())
 	assert.Equal(t, http.Header{}, req.Header)
 }

@@ -13,11 +13,11 @@ import (
 	"github.com/nyaruka/gocommon/urns"
 	"github.com/stretchr/testify/assert"
 
-	"github.com/nyaruka/courier"
-	"github.com/nyaruka/courier/core/models"
-	. "github.com/nyaruka/courier/handlers"
-	"github.com/nyaruka/courier/runtime"
-	"github.com/nyaruka/courier/test"
+	"github.com/nyaruka/courier/v26"
+	"github.com/nyaruka/courier/v26/core/models"
+	. "github.com/nyaruka/courier/v26/handlers"
+	"github.com/nyaruka/courier/v26/runtime"
+	"github.com/nyaruka/courier/v26/test"
 )
 
 const (
@@ -374,7 +374,7 @@ func TestDescribeURN(t *testing.T) {
 	defer func() { apiBaseURL = realAPIUrl }()
 
 	handler := newHandler()
-	handler.Initialize(test.NewMockServer(runtime.NewDefaultConfig(), test.NewMockBackend()))
+	handler.Initialize(courier.NewServer(runtime.NewTestRuntime(runtime.NewDefaultConfig()), test.NewMockBackend()))
 	clog := courier.NewChannelLog(courier.ChannelLogTypeUnknown, testChannels[0], handler.RedactValues(testChannels[0]))
 	urn, _ := urns.New(urns.VK, "123456789")
 	data := map[string]string{"name": "John Doe"}
@@ -475,7 +475,7 @@ var outgoingCases = []OutgoingTestCase{
 		Label:           "Send keyboard",
 		MsgText:         "Send keyboard",
 		MsgURN:          "vk:123456789",
-		MsgQuickReplies: []models.QuickReply{{Text: "A"}, {Text: "B"}, {Text: "C"}, {Text: "D"}, {Text: "E"}},
+		MsgQuickReplies: []models.QuickReply{{Type: "text", Text: "A"}, {Type: "text", Text: "B"}, {Type: "text", Text: "C"}, {Type: "text", Text: "D"}, {Type: "text", Text: "E"}},
 		MockResponses: map[string][]*httpx.MockResponse{
 			"https://api.vk.com/method/messages.send.json?*": {
 				httpx.NewMockResponse(200, nil, []byte(`{"response": 1}`)),
