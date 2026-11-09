@@ -2,12 +2,12 @@ package turn
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
-	"maps"
 	"net/http"
 	"net/url"
 	"slices"
@@ -435,27 +435,14 @@ type LocalizableParam struct {
 	Default string `json:"default"`
 }
 
-type Param struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
-}
-
-type Component struct {
-	Type       string  `json:"type"`
-	Parameters []Param `json:"parameters,omitempty"`
-}
-
 type templatePayload struct {
 	recipient
 	Type     string `json:"type"`
 	Template struct {
-		Namespace string `json:"namespace"`
-		Name      string `json:"name"`
-		Language  struct {
-			Policy string `json:"policy"`
-			Code   string `json:"code"`
-		} `json:"language"`
-		Components []Component `json:"components,omitempty"`
+		Namespace  string                `json:"namespace"`
+		Name       string                `json:"name"`
+		Language   whatsapp.Language     `json:"language"`
+		Components []*whatsapp.Component `json:"components,omitempty"`
 	} `json:"template"`
 }
 
@@ -484,9 +471,38 @@ type mtVideoPayload struct {
 }
 
 func buildPayloads(ctx context.Context, msg courier.MsgOut, h *handler, clog *courier.ChannelLog) ([]any, error) {
+	rcpt := newRecipient(msg)
+
+	// Template messages must be sent as a single template payload. Mailroom/goflow may also
+	// attach preview media and button quick-replies on the same message; those must not be
+	// turned into separate image/interactive sends.
+	if msg.Templating() != nil {
+		// prefer the language mailroom resolved for the template, falling back to deriving one from the msg locale
+		langCode := cmp.Or(msg.Templating().Language, getSupportedLanguage(msg.Locale()))
+		namespace := msg.Templating().Namespace
+		if namespace == "" {
+			namespace = msg.Channel().StringConfigForKey(configNamespace, "")
+		}
+		if namespace == "" {
+			return nil, fmt.Errorf("cannot send template message without Facebook namespace for channel: %s", msg.Channel().UUID())
+		}
+
+		waTpl := whatsapp.GetTemplatePayload(msg.Templating())
+
+		payload := templatePayload{
+			recipient: rcpt,
+			Type:      "template",
+		}
+		payload.Template.Namespace = namespace
+		payload.Template.Name = waTpl.Name
+		payload.Template.Language = whatsapp.Language{Policy: "deterministic", Code: langCode}
+		payload.Template.Components = waTpl.Components
+
+		return []any{payload}, nil
+	}
+
 	var payloads []any
 	var err error
-	rcpt := newRecipient(msg)
 
 	parts := handlers.SplitMsgByChannel(msg.Channel(), msg.Text(), maxMsgLength)
 
@@ -641,125 +657,76 @@ func buildPayloads(ctx context.Context, msg courier.MsgOut, h *handler, clog *co
 			}
 		}
 
-	} else {
-		// do we have a template?
-		if msg.Templating() != nil {
-			langCode := msg.Templating().Language
-			if langCode == "" {
-				langCode = getSupportedLanguage(msg.Locale())
-			}
-			namespace := msg.Templating().Namespace
-			if namespace == "" {
-				namespace = msg.Channel().StringConfigForKey(configNamespace, "")
-			}
-			if namespace == "" {
-				return nil, fmt.Errorf("cannot send template message without Facebook namespace for channel: %s", msg.Channel().UUID())
-			}
-
-			payload := templatePayload{
-				recipient: rcpt,
-				Type:      "template",
-			}
-			payload.Template.Namespace = namespace
-			payload.Template.Name = msg.Templating().Template.Name
-			payload.Template.Language.Policy = "deterministic"
-			payload.Template.Language.Code = langCode
-
-			for _, comp := range msg.Templating().Components {
-				// get the variables used by this component in order of their names 1, 2 etc
-				compParams := make([]models.TemplatingVariable, 0, len(comp.Variables))
-
-				for _, varName := range slices.Sorted(maps.Keys(comp.Variables)) {
-					compParams = append(compParams, msg.Templating().Variables[comp.Variables[varName]])
+	} else if isInteractiveMsg {
+		for i, part := range parts {
+			if i < (len(parts) - 1) { //if split into more than one message, the first parts will be text and the last interactive
+				payload := mtTextPayload{
+					recipient: rcpt,
+					Type:      "text",
 				}
+				payload.Text.Body = part
+				payloads = append(payloads, payload)
 
-				if comp.Type == "body" || strings.HasPrefix(comp.Type, "body/") {
-					component := &Component{Type: "body"}
-					for _, p := range compParams {
-						component.Parameters = append(component.Parameters, Param{Type: p.Type, Text: p.Value})
-					}
-					payload.Template.Components = append(payload.Template.Components, *component)
-
-				}
-
-			}
-
-			payloads = append(payloads, payload)
-
-		} else {
-
-			if isInteractiveMsg {
-				for i, part := range parts {
-					if i < (len(parts) - 1) { //if split into more than one message, the first parts will be text and the last interactive
-						payload := mtTextPayload{
-							recipient: rcpt,
-							Type:      "text",
-						}
-						payload.Text.Body = part
-						payloads = append(payloads, payload)
-
-					} else {
-						payload := mtInteractivePayload{
-							recipient: rcpt,
-							Type:      "interactive",
-						}
-
-						// we show buttons
-						if !qrsAsList {
-							payload.Interactive.Type = "button"
-							payload.Interactive.Body.Text = part
-							btns := make([]mtButton, len(qrs))
-							for i, qr := range qrs {
-								btns[i] = mtButton{
-									Type: "reply",
-								}
-								btns[i].Reply.ID = fmt.Sprint(i)
-								btns[i].Reply.Title = qr.Text
-							}
-							payload.Interactive.Action.Buttons = btns
-							payloads = append(payloads, payload)
-						} else {
-							payload.Interactive.Type = "list"
-							payload.Interactive.Body.Text = part
-							payload.Interactive.Action.Button = "Menu"
-							section := mtSection{
-								Rows: make([]mtSectionRow, len(qrs)),
-							}
-							for i, qr := range qrs {
-								section.Rows[i] = mtSectionRow{
-									ID:          fmt.Sprint(i),
-									Title:       qr.Text,
-									Description: qr.Extra,
-								}
-							}
-							payload.Interactive.Action.Sections = []mtSection{
-								section,
-							}
-							payloads = append(payloads, payload)
-						}
-					}
-				}
 			} else {
-				for _, part := range parts {
+				payload := mtInteractivePayload{
+					recipient: rcpt,
+					Type:      "interactive",
+				}
 
-					// check if you have a link
-					var payload mtTextPayload
-					if strings.Contains(part, "https://") || strings.Contains(part, "http://") {
-						payload = mtTextPayload{
-							recipient:  rcpt,
-							Type:       "text",
-							PreviewURL: true,
+				// we show buttons
+				if !qrsAsList {
+					payload.Interactive.Type = "button"
+					payload.Interactive.Body.Text = part
+					btns := make([]mtButton, len(qrs))
+					for i, qr := range qrs {
+						btns[i] = mtButton{
+							Type: "reply",
 						}
-					} else {
-						payload = mtTextPayload{
-							recipient: rcpt,
-							Type:      "text",
+						btns[i].Reply.ID = fmt.Sprint(i)
+						btns[i].Reply.Title = qr.Text
+					}
+					payload.Interactive.Action.Buttons = btns
+					payloads = append(payloads, payload)
+				} else {
+					payload.Interactive.Type = "list"
+					payload.Interactive.Body.Text = part
+					payload.Interactive.Action.Button = "Menu"
+					section := mtSection{
+						Rows: make([]mtSectionRow, len(qrs)),
+					}
+					for i, qr := range qrs {
+						section.Rows[i] = mtSectionRow{
+							ID:          fmt.Sprint(i),
+							Title:       qr.Text,
+							Description: qr.Extra,
 						}
 					}
-					payload.Text.Body = part
+					payload.Interactive.Action.Sections = []mtSection{
+						section,
+					}
 					payloads = append(payloads, payload)
 				}
 			}
+		}
+	} else {
+		for _, part := range parts {
+
+			// check if you have a link
+			var payload mtTextPayload
+			if strings.Contains(part, "https://") || strings.Contains(part, "http://") {
+				payload = mtTextPayload{
+					recipient:  rcpt,
+					Type:       "text",
+					PreviewURL: true,
+				}
+			} else {
+				payload = mtTextPayload{
+					recipient: rcpt,
+					Type:      "text",
+				}
+			}
+			payload.Text.Body = part
+			payloads = append(payloads, payload)
 		}
 	}
 	return payloads, err
