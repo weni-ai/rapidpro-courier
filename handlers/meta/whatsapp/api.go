@@ -118,7 +118,7 @@ func (m WAMessage) ExtractData(clog *courier.ChannelLog) (time.Time, urns.URN, s
 	}
 	date = parseTimestamp(ts)
 
-	urn, err = urns.New(urns.WhatsApp, m.From)
+	urn, err = urns.New(urns.WhatsApp, Identifier(m.From, m.FromUserID))
 	if err != nil {
 		finalErr = errors.New("invalid whatsapp id")
 		return date, urn, text, mediaURL, mediaID, err, finalErr
@@ -317,7 +317,8 @@ type Interactive struct {
 type SendRequest struct {
 	MessagingProduct string `json:"messaging_product"`
 	RecipientType    string `json:"recipient_type"`
-	To               string `json:"to"`
+	To               string `json:"to,omitempty"`
+	Recipient        string `json:"recipient,omitempty"`
 	Type             string `json:"type"`
 
 	Text *Text `json:"text,omitempty"`
@@ -348,10 +349,34 @@ type SendResponse struct {
 	} `json:"error"`
 }
 
+// Identifier returns From if present, otherwise FromUserID (WhatsApp BSUID when the phone is omitted).
+func Identifier(from, fromUserID string) string {
+	if from != "" {
+		return from
+	}
+	return fromUserID
+}
+
 // UserID returns the user_id from the first contact in the response if present.
 func (r *SendResponse) UserID() string {
 	if len(r.Contacts) > 0 && r.Contacts[0].UserID != "" {
 		return r.Contacts[0].UserID
 	}
 	return ""
+}
+
+// AttachUserID appends a WhatsApp BSUID as a secondary URN on the incoming message when it is valid and
+// different from the primary URN. Malformed IDs are ignored (caller logs the error).
+func AttachUserID(event courier.MsgIn, primary urns.URN, userID string) error {
+	if userID == "" {
+		return nil
+	}
+	userIDURN, err := urns.New(urns.WhatsApp, userID)
+	if err != nil {
+		return fmt.Errorf("invalid user_id for whatsapp URN: %w", err)
+	}
+	if userIDURN != primary {
+		event.WithNewURN(userIDURN, models.NewURNAppend)
+	}
+	return nil
 }

@@ -261,7 +261,12 @@ func (h *handler) processWhatsAppPayload(ctx context.Context, channel courier.Ch
 		for _, change := range entry.Changes {
 
 			for _, contact := range change.Value.Contacts {
-				contactNames[contact.WaID] = contact.Profile.Name
+				if contact.WaID != "" {
+					contactNames[contact.WaID] = contact.Profile.Name
+				}
+				if contact.UserID != "" {
+					contactNames[contact.UserID] = contact.Profile.Name
+				}
 			}
 
 			for _, waMsg := range change.Value.Messages {
@@ -292,21 +297,15 @@ func (h *handler) processWhatsAppPayload(ctx context.Context, channel courier.Ch
 					}
 				}
 
-				// create our message
-				event := h.Backend().NewIncomingMsg(ctx, channel, urn, text, waMsg.ID, clog).WithReceivedOn(date).WithContactName(contactNames[waMsg.From])
+				sender := whatsapp.Identifier(waMsg.From, waMsg.FromUserID)
+				event := h.Backend().NewIncomingMsg(ctx, channel, urn, text, waMsg.ID, clog).WithReceivedOn(date).WithContactName(contactNames[sender])
 
 				if mediaURL != "" {
 					event.WithAttachment(mediaURL)
 				}
 
-				// if we have a user_id, add it as secondary BSUID URN
-				if waMsg.FromUserID != "" {
-					userIDURN, urnErr := urns.New(urns.BSUID, waMsg.FromUserID)
-					if urnErr == nil {
-						event.WithNewURN(userIDURN, models.NewURNAppend)
-					} else {
-						courier.LogRequestError(r, channel, fmt.Errorf("invalid user_id for BSUID URN: %w", urnErr))
-					}
+				if urnErr := whatsapp.AttachUserID(event, urn, waMsg.FromUserID); urnErr != nil {
+					courier.LogRequestError(r, channel, urnErr)
 				}
 
 				err = h.Backend().WriteMsg(ctx, event, clog)
@@ -724,9 +723,9 @@ func (h *handler) sendWhatsAppMsg(ctx context.Context, msg courier.MsgOut, res *
 	// if we got a user_id in the response, set it as a new URN on the send result so the backend
 	// can queue a contact_changed task to append it to the contact
 	if userID != "" {
-		userIDURN, err := urns.New(urns.BSUID, userID)
+		userIDURN, err := urns.New(urns.WhatsApp, userID)
 		if err != nil {
-			clog.RawError(fmt.Errorf("unable to make BSUID URN from user_id %s: %w", userID, err))
+			clog.RawError(fmt.Errorf("unable to make whatsapp URN from user_id %s: %w", userID, err))
 		} else {
 			res.SetNewURN(userIDURN)
 		}

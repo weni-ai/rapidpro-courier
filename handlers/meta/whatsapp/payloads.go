@@ -10,7 +10,17 @@ import (
 	"github.com/nyaruka/courier/v26/handlers"
 	"github.com/nyaruka/courier/v26/utils"
 	"github.com/nyaruka/courier/v26/utils/clogs"
+	"github.com/nyaruka/gocommon/urns"
 )
+
+// RecipientFields returns the to and recipient field values for the given URN. A business-scoped user ID
+// (whatsapp URN in the CC.xxx form) goes in the recipient field; a phone number goes in the to field.
+func RecipientFields(urn urns.URN) (to, recipient string) {
+	if courier.IsWhatsAppBSUID(urn) {
+		return "", urn.Path()
+	}
+	return urn.Path(), ""
+}
 
 func GetMsgPayloads(ctx context.Context, msg courier.MsgOut, maxMsgLength int, clog *courier.ChannelLog) ([]SendRequest, error) {
 	if msg.Templating() != nil {
@@ -21,7 +31,8 @@ func GetMsgPayloads(ctx context.Context, msg courier.MsgOut, maxMsgLength int, c
 
 // newBasePayload creates a SendRequest with common fields populated.
 func newBasePayload(msg courier.MsgOut) SendRequest {
-	return SendRequest{MessagingProduct: "whatsapp", RecipientType: "individual", To: msg.URN().Path()}
+	to, recipient := RecipientFields(msg.URN())
+	return SendRequest{MessagingProduct: "whatsapp", RecipientType: "individual", To: to, Recipient: recipient}
 }
 
 func (p SendRequest) withTemplate(templating *models.Templating) SendRequest {
