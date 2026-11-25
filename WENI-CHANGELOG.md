@@ -1,3 +1,7 @@
+1.7.2-courier-26.0.0
+----------
+  * Send Turn.io WhatsApp templates with media headers as template messages
+
 1.7.1-courier-10.2.0
 ----------
   * Add supported template languages
