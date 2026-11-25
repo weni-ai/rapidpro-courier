@@ -3,17 +3,17 @@ package courier_test
 import (
 	"context"
 	"io"
-	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/nyaruka/courier"
-	"github.com/nyaruka/courier/core/models"
-	"github.com/nyaruka/courier/runtime"
-	"github.com/nyaruka/courier/test"
-	"github.com/nyaruka/courier/utils/clogs"
+	"github.com/nyaruka/courier/v26"
+	"github.com/nyaruka/courier/v26/core/models"
+	"github.com/nyaruka/courier/v26/runtime"
+	"github.com/nyaruka/courier/v26/test"
+	"github.com/nyaruka/courier/v26/utils"
+	"github.com/nyaruka/courier/v26/utils/clogs"
 	"github.com/nyaruka/gocommon/dates"
 	"github.com/nyaruka/gocommon/httpx"
 	"github.com/nyaruka/gocommon/urns"
@@ -26,71 +26,20 @@ func testConfig() *runtime.Config {
 	cfg := runtime.NewDefaultConfig()
 	cfg.DB = "postgres://courier_test:temba@postgres:5432/courier_test?sslmode=disable"
 	cfg.Valkey = "valkey://valkey:6379/0"
-	cfg.Port = 8081
+	cfg.PublicPort = 8180
+	cfg.InternalPort = 8181
 	return cfg
-}
-
-func TestServerURLs(t *testing.T) {
-	logger := slog.Default()
-	cfg := testConfig()
-	cfg.StatusUsername = "admin"
-	cfg.StatusPassword = "password123"
-
-	mb := test.NewMockBackend()
-	mb.AddChannel(test.NewMockChannel("95710b36-855d-4832-a723-5f71f73688a0", "MCK", "12345", "RW", []string{urns.Phone.Prefix}, nil))
-
-	server := courier.NewServerWithLogger(cfg, mb, logger)
-	server.Start()
-	defer server.Stop()
-
-	// wait for server to come up
-	time.Sleep(100 * time.Millisecond)
-
-	request := func(method, url, user, pass string) (int, string) {
-		req, _ := http.NewRequest(method, url, nil)
-		if user != "" {
-			req.SetBasicAuth(user, pass)
-		}
-		trace, err := httpx.DoTrace(http.DefaultClient, req, nil, nil, 0)
-		require.NoError(t, err)
-		return trace.Response.StatusCode, string(trace.ResponseBody)
-	}
-
-	// route listing at the / root
-	statusCode, respBody := request("GET", "http://localhost:8081/", "", "")
-	assert.Equal(t, 200, statusCode)
-	assert.Contains(t, respBody, "/c/mck/{uuid:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}}/receive - Mock Handler receive")
-
-	// can't access status page without auth
-	statusCode, respBody = request("GET", "http://localhost:8081/status", "", "")
-	assert.Equal(t, 401, statusCode)
-	assert.Equal(t, respBody, "Unauthorized")
-
-	// can access status page without auth
-	statusCode, respBody = request("GET", "http://localhost:8081/status", "admin", "password123")
-	assert.Equal(t, 200, statusCode)
-	assert.Contains(t, respBody, "ALL GOOD")
-
-	// can't access status page with wrong method
-	statusCode, respBody = request("POST", "http://localhost:8081/status", "admin", "password123")
-	assert.Equal(t, 405, statusCode)
-	assert.Equal(t, respBody, "{\"message\":\"Method Not Allowed\",\"data\":[{\"type\":\"error\",\"error\":\"method not allowed: POST\"}]}\n")
-
-	// can't access non-existent page
-	statusCode, respBody = request("POST", "http://localhost:8081/nothere", "admin", "password123")
-	assert.Equal(t, 404, statusCode)
-	assert.Equal(t, respBody, "{\"message\":\"Not Found\",\"data\":[{\"type\":\"error\",\"error\":\"not found: /nothere\"}]}\n")
 }
 
 func TestIncoming(t *testing.T) {
 	// create and start our backend and server
 	mb := test.NewMockBackend()
-	s := courier.NewServer(testConfig(), mb)
+	s := courier.NewServer(runtime.NewTestRuntime(testConfig()), mb)
 
-	s.Start()
+	require.NoError(t, s.Start())
 	defer s.Stop()
 
-	resp, err := http.Get("http://localhost:8081/c/mck/e4bb1578-29da-4fa5-a214-9da19dd24230/receive")
+	resp, err := http.Get("http://localhost:8180/c/mck/e4bb1578-29da-4fa5-a214-9da19dd24230/receive")
 	assert.NoError(t, err)
 	assert.Equal(t, 400, resp.StatusCode)
 	defer resp.Body.Close()
@@ -101,7 +50,7 @@ func TestIncoming(t *testing.T) {
 	clog := mb.WrittenChannelLogs()[0]
 	assert.Len(t, clog.HttpLogs, 1)
 
-	req, _ := http.NewRequest("GET", "http://localhost:8081/c/mck/e4bb1578-29da-4fa5-a214-9da19dd24230/receive?from=2065551212&text=hello", nil)
+	req, _ := http.NewRequest("GET", "http://localhost:8180/c/mck/e4bb1578-29da-4fa5-a214-9da19dd24230/receive?from=2065551212&text=hello", nil)
 	req.Header.Set("Cookie", "secret")
 	resp, err = http.DefaultClient.Do(req)
 	assert.NoError(t, err)
@@ -117,8 +66,10 @@ func TestIncoming(t *testing.T) {
 }
 
 func TestOutgoing(t *testing.T) {
-	defer httpx.SetRequestor(httpx.DefaultRequestor)
-	httpx.SetRequestor(httpx.NewMockRequestor(map[string][]*httpx.MockResponse{
+	// create and start our backend and server
+	mb := test.NewMockBackend()
+	s := courier.NewServer(runtime.NewTestRuntime(testConfig()), mb)
+	s.Runtime().HTTP.Transport = httpx.WithMocks(nil, map[string][]*httpx.MockResponse{
 		"http://mock.com/send": {
 			httpx.NewMockResponse(200, nil, []byte(`SENT`)),
 			httpx.MockConnectionError,
@@ -126,13 +77,9 @@ func TestOutgoing(t *testing.T) {
 			httpx.NewMockResponse(429, nil, []byte(`too much!`)),
 			httpx.NewMockResponse(403, nil, []byte(`stop!`)),
 		},
-	}))
+	})
 
-	// create and start our backend and server
-	mb := test.NewMockBackend()
-	s := courier.NewServer(testConfig(), mb)
-
-	s.Start()
+	require.NoError(t, s.Start())
 	defer s.Stop()
 
 	// create two channels but only register one of them
@@ -227,7 +174,20 @@ func TestOutgoing(t *testing.T) {
 func TestFetchAttachment(t *testing.T) {
 	testJPG := test.ReadFile("test/testdata/test.jpg")
 
-	httpMocks := httpx.NewMockRequestor(map[string][]*httpx.MockResponse{
+	defer uuids.SetGenerator(uuids.DefaultGenerator)
+	uuids.SetGenerator(uuids.NewSeededGenerator(1234, dates.NewSequentialNow(time.Date(2024, 9, 11, 14, 33, 0, 0, time.UTC), time.Second)))
+
+	cfg := runtime.NewDefaultConfig()
+	cfg.AuthToken = "sesame"
+	cfg.PublicPort = 8180
+	cfg.InternalPort = 8181
+
+	mb := test.NewMockBackend()
+	mockChannel := test.NewMockChannel("e4bb1578-29da-4fa5-a214-9da19dd24230", "MCK", "2020", "US", []string{urns.Phone.Prefix}, map[string]any{})
+	mb.AddChannel(mockChannel)
+
+	server := courier.NewServer(runtime.NewTestRuntime(cfg), mb)
+	server.Runtime().HTTP.Transport = httpx.WithMocks(nil, map[string][]*httpx.MockResponse{
 		"http://mock.com/media/hello.jpg": {
 			httpx.NewMockResponse(200, nil, testJPG),
 		},
@@ -238,36 +198,15 @@ func TestFetchAttachment(t *testing.T) {
 			httpx.MockConnectionError,
 		},
 	})
-	httpMocks.SetIgnoreLocal(true)
-
-	defer httpx.SetRequestor(httpx.DefaultRequestor)
-	httpx.SetRequestor(httpMocks)
-
-	defer uuids.SetGenerator(uuids.DefaultGenerator)
-	uuids.SetGenerator(uuids.NewSeededGenerator(1234, dates.NewSequentialNow(time.Date(2024, 9, 11, 14, 33, 0, 0, time.UTC), time.Second)))
-
-	logger := slog.Default()
-	cfg := runtime.NewDefaultConfig()
-	cfg.AuthToken = "sesame"
-	cfg.Port = 8081
-
-	mb := test.NewMockBackend()
-	mockChannel := test.NewMockChannel("e4bb1578-29da-4fa5-a214-9da19dd24230", "MCK", "2020", "US", []string{urns.Phone.Prefix}, map[string]any{})
-	mb.AddChannel(mockChannel)
-
-	server := courier.NewServerWithLogger(cfg, mb, logger)
-	server.Start()
+	require.NoError(t, server.Start())
 	defer server.Stop()
 
-	// wait for server to come up
-	time.Sleep(100 * time.Millisecond)
-
 	submit := func(body, authToken string) (int, []byte) {
-		req, _ := http.NewRequest("POST", "http://localhost:8081/ci/attachment/fetch", strings.NewReader(body))
+		req, _ := http.NewRequest("POST", "http://localhost:8181/ci/attachment/fetch", strings.NewReader(body))
 		if authToken != "" {
 			req.Header.Set("Authorization", "Bearer "+authToken)
 		}
-		trace, err := httpx.DoTrace(http.DefaultClient, req, nil, nil, 0)
+		trace, _, err := utils.TraceHTTP(http.DefaultClient, req, 0)
 		require.NoError(t, err)
 		return trace.Response.StatusCode, trace.ResponseBody
 	}
@@ -311,6 +250,58 @@ func TestFetchAttachment(t *testing.T) {
 	statusCode, respBody = submit(`{"channel_uuid": "e4bb1578-29da-4fa5-a214-9da19dd24230", "channel_type": "MCK", "url": "http://mock.com/media/hello.pdf"}`, "sesame")
 	assert.Equal(t, 200, statusCode)
 	assert.JSONEq(t, `{"attachment": {"content_type": "unavailable", "url": "http://mock.com/media/hello.pdf", "size": 0}, "log_uuid": "0191e180-8530-7000-8ef6-384876655d1b"}`, string(respBody))
+}
+
+// TestListeners verifies that public and internal endpoints are correctly split between
+// the two listener ports.
+func TestListeners(t *testing.T) {
+	cfg := testConfig()
+	cfg.AuthToken = "sesame"
+
+	mb := test.NewMockBackend()
+	mb.AddChannel(test.NewMockChannel("e4bb1578-29da-4fa5-a214-9da19dd24230", "MCK", "2020", "US", []string{urns.Phone.Prefix}, nil))
+
+	server := courier.NewServer(runtime.NewTestRuntime(cfg), mb)
+	require.NoError(t, server.Start())
+	defer server.Stop()
+
+	const publicURL = "http://localhost:8180"
+	const internalURL = "http://localhost:8181"
+
+	// don't follow redirects so we can observe StripSlashes redirects directly
+	client := &http.Client{
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+
+	tcs := []struct {
+		label  string
+		method string
+		url    string
+		status int
+	}{
+		// public listener: health at /, /c/*
+		{"public: health", "GET", publicURL + "/", 200},
+		{"public: channel route (bad params)", "GET", publicURL + "/c/mck/e4bb1578-29da-4fa5-a214-9da19dd24230/receive", 400},
+		{"public: internal route not exposed", "POST", publicURL + "/ci/attachment/fetch", 404},
+		{"public: unknown path", "GET", publicURL + "/nope", 404},
+
+		// internal listener: health at /, /ci/*
+		{"internal: health", "GET", internalURL + "/", 200},
+		{"internal: internal route (no auth)", "POST", internalURL + "/ci/attachment/fetch", 401},
+		{"internal: channel route not exposed", "GET", internalURL + "/c/mck/e4bb1578-29da-4fa5-a214-9da19dd24230/receive", 404},
+		{"internal: unknown path", "GET", internalURL + "/nope", 404},
+	}
+
+	for _, tc := range tcs {
+		req, err := http.NewRequest(tc.method, tc.url, nil)
+		require.NoError(t, err, tc.label)
+
+		resp, err := client.Do(req)
+		require.NoError(t, err, tc.label)
+		resp.Body.Close()
+
+		assert.Equal(t, tc.status, resp.StatusCode, tc.label)
+	}
 }
 
 // utility to send a message on a mocked backend and block until it's marked as sent

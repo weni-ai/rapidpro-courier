@@ -38,10 +38,10 @@ var NilContactUUID = ContactUUID("")
 
 // Contact is our struct for a contact in the database
 type Contact struct {
-	OrgID_ OrgID       `db:"org_id"`
-	ID_    ContactID   `db:"id"`
-	UUID_  ContactUUID `db:"uuid"`
-	Name_  null.String `db:"name"`
+	OrgID_  OrgID       `db:"org_id"`
+	ID_     ContactID   `db:"id"`
+	UUID_   ContactUUID `db:"uuid"`
+	Name_   null.String `db:"name"`
 	Status_ string      `db:"status"` // single char in DB: A=active, B=blocked, S=stopped, V=archived
 
 	URNID_ ContactURNID `db:"urn_id"`

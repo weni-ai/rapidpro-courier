@@ -15,9 +15,10 @@ import (
 
 	"github.com/gomodule/redigo/redis"
 	filetype "github.com/h2non/filetype"
-	"github.com/nyaruka/courier"
-	"github.com/nyaruka/courier/core/models"
-	"github.com/nyaruka/courier/utils/queue"
+	"github.com/nyaruka/courier/v26"
+	"github.com/nyaruka/courier/v26/core/models"
+	"github.com/nyaruka/courier/v26/utils/queue"
+	"github.com/nyaruka/gocommon/dbutil"
 	"github.com/nyaruka/gocommon/urns"
 )
 
@@ -30,9 +31,10 @@ type MsgIn struct {
 	URN_           urns.URN           `json:"urn"`
 	ContactName_   string             `json:"contact_name"`
 	URNAuthTokens_ map[string]string  `json:"auth_tokens"`
-	NewURN_        *NewURNSpec        `json:"new_urn,omitempty"`
+	NewURN_        *models.NewURNSpec `json:"new_urn,omitempty"`
 
-	channel *models.Channel
+	channel   *models.Channel
+	duplicate bool
 }
 
 func (m *MsgIn) Channel() courier.Channel { return m.channel }
@@ -48,15 +50,9 @@ func (m *MsgIn) WithURNAuthTokens(tokens map[string]string) courier.MsgIn {
 	return m
 }
 func (m *MsgIn) WithReceivedOn(date time.Time) courier.MsgIn { m.SentOn_ = &date; return m }
-func (m *MsgIn) WithNewURN(urn urns.URN) courier.MsgIn {
-	m.NewURN_ = &NewURNSpec{Value: urn, Action: "append"}
+func (m *MsgIn) WithNewURN(urn urns.URN, action models.NewURNAction) courier.MsgIn {
+	m.NewURN_ = &models.NewURNSpec{Value: urn, Action: action}
 	return m
-}
-
-// NewURNSpec describes a URN to append to the contact after this message is handled
-type NewURNSpec struct {
-	Value  urns.URN `json:"value"`
-	Action string   `json:"action"`
 }
 
 func (m *MsgIn) hash() string {
@@ -69,7 +65,7 @@ func writeMsg(ctx context.Context, b *backend, m *MsgIn, clog *courier.ChannelLo
 	channel := m.Channel()
 
 	// check for data: attachment URLs which need to be fetched now - fetching of other URLs can be deferred until
-	// message handling and performed by calling the /c/_fetch-attachment endpoint
+	// message handling and performed by calling the /ci/attachment/fetch endpoint
 	for i, attURL := range m.Attachments_ {
 		if strings.HasPrefix(attURL, "data:") {
 			attData, err := base64.StdEncoding.DecodeString(attURL[5:])
@@ -99,6 +95,11 @@ func writeMsg(ctx context.Context, b *backend, m *MsgIn, clog *courier.ChannelLo
 	// try to write it our db
 	contact, err := writeMsgToDB(ctx, b, m, clog)
 	if err != nil {
+		if dbutil.IsUniqueViolation(err) {
+			slog.Warn("duplicate incoming message detected, ignoring", "msg", m.UUID())
+			return nil
+		}
+
 		// if we failed, log and write to spool
 		slog.Error("error writing to db", "error", err, "msg", m.UUID())
 
@@ -119,14 +120,6 @@ func writeMsg(ctx context.Context, b *backend, m *MsgIn, clog *courier.ChannelLo
 	return err
 }
 
-const sqlInsertMsg = `
-INSERT INTO
-	msgs_msg(org_id, uuid, direction, text, attachments, msg_type, msg_count, error_count, high_priority, status, is_android,
-             visibility, external_id, channel_id, contact_id, contact_urn_id, created_on, modified_on, sent_on, log_uuids)
-    VALUES(:org_id, :uuid, 'I', :text, :attachments, 'T', 1, 0, FALSE, 'P', FALSE,
-             'V', :external_id, :channel_id, :contact_id, :contact_urn_id, :created_on, :modified_on, :sent_on, :log_uuids)
-RETURNING id`
-
 func writeMsgToDB(ctx context.Context, b *backend, m *MsgIn, clog *courier.ChannelLog) (*models.Contact, error) {
 	contact, err := contactForMsg(ctx, b, m, clog)
 
@@ -139,11 +132,9 @@ func writeMsgToDB(ctx context.Context, b *backend, m *MsgIn, clog *courier.Chann
 	m.ContactID_ = contact.ID_
 	m.ContactURNID_ = contact.URNID_
 
-	rows, err := b.rt.DB.NamedQueryContext(ctx, sqlInsertMsg, m)
-	if err != nil {
+	if err := models.InsertIncomingMsg(ctx, b.rt.DB, m.MsgIn); err != nil {
 		return nil, fmt.Errorf("error inserting message: %w", err)
 	}
-	defer rows.Close()
 
 	return contact, nil
 }
@@ -177,6 +168,10 @@ func (b *backend) flushMsgFile(filename string, contents []byte) error {
 	// try to write it our db
 	contact, err := writeMsgToDB(ctx, b, m, clog)
 	if err != nil {
+		if dbutil.IsUniqueViolation(err) {
+			slog.Warn("duplicate incoming message detected, ignoring", "msg", m.UUID())
+			return nil
+		}
 		return err // fail? oh well, we'll try again later
 	}
 
@@ -201,7 +196,7 @@ func (b *backend) checkMsgAlreadyReceived(ctx context.Context, m *MsgIn) models.
 	defer rc.Close()
 
 	// if we have an external id use that
-	if m.ExternalID_ != "" {
+	if m.ExternalIdentifier_ != "" {
 		fingerprint := fmt.Sprintf("%s|%s|%s", m.Channel().UUID(), m.URN().Identity(), m.ExternalID())
 
 		if uuid, _ := b.receivedExternalIDs.Get(ctx, rc, fingerprint); uuid != "" {
@@ -230,7 +225,7 @@ func (b *backend) recordMsgReceived(ctx context.Context, m *MsgIn) {
 	rc := b.rt.VK.Get()
 	defer rc.Close()
 
-	if m.ExternalID_ != "" {
+	if m.ExternalIdentifier_ != "" {
 		fingerprint := fmt.Sprintf("%s|%s|%s", m.Channel().UUID(), m.URN().Identity(), m.ExternalID())
 
 		if err := b.receivedExternalIDs.Set(ctx, rc, fingerprint, string(m.UUID())); err != nil {

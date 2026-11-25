@@ -3,7 +3,7 @@ package utils_test
 import (
 	"testing"
 
-	"github.com/nyaruka/courier/utils"
+	"github.com/nyaruka/courier/v26/utils"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -26,76 +26,6 @@ func TestURLGetFile(t *testing.T) {
 	test2, err := utils.BasePathForURL("application/pdf:https://some-url.host.service.com/media/999/zz99/9999/da514731-4bed-428c-afb9-860dd94530cc.xlsx")
 	assert.Equal(t, nil, err)
 	assert.Equal(t, "da514731-4bed-428c-afb9-860dd94530cc.xlsx", test2)
-}
-
-func TestStringsToRows(t *testing.T) {
-	tcs := []struct {
-		replies      []string
-		maxRows      int
-		maxRowRunes  int
-		paddingRunes int
-		expected     [][]string
-	}{
-		{
-
-			replies:      []string{"OK"},
-			maxRows:      3,
-			maxRowRunes:  30,
-			paddingRunes: 2,
-			expected: [][]string{
-				{"OK"},
-			},
-		},
-		{
-			// all values fit in single row
-			replies:      []string{"Yes", "No", "Maybe"},
-			maxRows:      3,
-			maxRowRunes:  30,
-			paddingRunes: 2,
-			expected: [][]string{
-				{"Yes", "No", "Maybe"},
-			},
-		},
-		{
-			// all values can be their own row
-			replies:      []string{"12345678901234567890", "23456789012345678901", "34567890123456789012"},
-			maxRows:      3,
-			maxRowRunes:  25,
-			paddingRunes: 2,
-			expected: [][]string{
-				{"12345678901234567890"},
-				{"23456789012345678901"},
-				{"34567890123456789012"},
-			},
-		},
-		{
-			replies:      []string{"1234567890", "2345678901", "3456789012", "4567890123"},
-			maxRows:      3,
-			maxRowRunes:  25,
-			paddingRunes: 1,
-			expected: [][]string{
-				{"1234567890", "2345678901"},
-				{"3456789012", "4567890123"},
-			},
-		},
-		{
-			// we break chars per row limit rather than row limit
-			replies:      []string{"Vanilla", "Chocolate", "Strawberry", "Lemon Sorbet", "Ecuadorian Amazonian Papayas", "Mint"},
-			maxRows:      3,
-			maxRowRunes:  30,
-			paddingRunes: 2,
-			expected: [][]string{
-				{"Vanilla", "Chocolate"},
-				{"Strawberry", "Lemon Sorbet"},
-				{"Ecuadorian Amazonian Papayas", "Mint"},
-			},
-		},
-	}
-
-	for _, tc := range tcs {
-		rows := utils.StringsToRows(tc.replies, tc.maxRows, tc.maxRowRunes, tc.paddingRunes)
-		assert.Equal(t, tc.expected, rows, "rows mismatch for replies %v", tc.replies)
-	}
 }
 
 func TestMapContains(t *testing.T) {

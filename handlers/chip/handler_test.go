@@ -3,10 +3,10 @@ package chip
 import (
 	"testing"
 
-	"github.com/nyaruka/courier"
-	"github.com/nyaruka/courier/core/models"
-	. "github.com/nyaruka/courier/handlers"
-	"github.com/nyaruka/courier/test"
+	"github.com/nyaruka/courier/v26"
+	"github.com/nyaruka/courier/v26/core/models"
+	. "github.com/nyaruka/courier/v26/handlers"
+	"github.com/nyaruka/courier/v26/test"
 	"github.com/nyaruka/gocommon/httpx"
 	"github.com/nyaruka/gocommon/urns"
 )
@@ -96,8 +96,8 @@ var outgoingCases = []OutgoingTestCase{
 		MsgText: "Simple message ☺",
 		MsgURN:  "webchat:65vbbDAQCdPdEWlEhDGy4utO",
 		MsgQuickReplies: []models.QuickReply{
-			{Text: "Yes"},
-			{Text: "No"},
+			{Type: "text", Text: "Yes"},
+			{Type: "text", Text: "No"},
 		},
 		MockResponses: map[string][]*httpx.MockResponse{
 			"http://textit.com/wc/send/8eb23e93-5ecb-45ba-b726-3b064e0c56ab/": {

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -15,11 +14,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nyaruka/courier"
-	"github.com/nyaruka/courier/core/models"
-	"github.com/nyaruka/courier/runtime"
-	"github.com/nyaruka/courier/test"
-	"github.com/nyaruka/courier/utils/clogs"
+	"github.com/nyaruka/courier/v26"
+	"github.com/nyaruka/courier/v26/core/models"
+	"github.com/nyaruka/courier/v26/runtime"
+	"github.com/nyaruka/courier/v26/test"
+	"github.com/nyaruka/courier/v26/utils/clogs"
 	"github.com/nyaruka/gocommon/dates"
 	"github.com/nyaruka/gocommon/httpx"
 	"github.com/nyaruka/gocommon/i18n"
@@ -73,15 +72,15 @@ type IncomingTestCase struct {
 	ExpectedStatuses      []ExpectedStatus
 	ExpectedEvents        []ExpectedEvent
 	ExpectedErrors        []*clogs.Error
-	ExpectedNewURN        string
+	ExpectedNewURN        *models.NewURNSpec
 	NoLogsExpected        bool
 }
 
 // utility method to make a request to a handler URL
-func testHandlerRequest(tb testing.TB, s courier.Server, path string, headers map[string]string, data string, multipartFormFields map[string]string, expectedStatus int, expectedBodyContains string, requestPrepFunc RequestPrepFunc) string {
+func testHandlerRequest(tb testing.TB, s *courier.Server, path string, headers map[string]string, data string, multipartFormFields map[string]string, expectedStatus int, expectedBodyContains string, requestPrepFunc RequestPrepFunc) string {
 	var req *http.Request
 	var err error
-	url := fmt.Sprintf("https://%s%s", s.Config().Domain, path)
+	url := fmt.Sprintf("https://%s%s", s.Runtime().Config.Domain, path)
 
 	if data != "" {
 		req, err = http.NewRequest(http.MethodPost, url, strings.NewReader(data))
@@ -138,19 +137,16 @@ func testHandlerRequest(tb testing.TB, s courier.Server, path string, headers ma
 	return body
 }
 
-func newServer(backend courier.Backend) courier.Server {
+func newServer(backend courier.Backend) *courier.Server {
 	// for benchmarks, log to null
-	logger := slog.Default()
 	log.SetOutput(io.Discard)
 
 	cfg := runtime.NewDefaultConfig()
 	cfg.FacebookWebhookSecret = "fb_webhook_secret"
 	cfg.FacebookApplicationSecret = "fb_app_secret"
-	cfg.WhatsappCloudApplicationSecret = "fb_app_secret"
 	cfg.WhatsappAdminSystemUserToken = "wac_admin_system_user_token"
 
-	return courier.NewServerWithLogger(cfg, backend, logger)
-
+	return courier.NewServer(runtime.NewTestRuntime(cfg), backend)
 }
 
 // RunIncomingTestCases runs all the passed in tests cases for the passed in channel configurations
@@ -196,7 +192,6 @@ func RunIncomingTestCases(t *testing.T, channels []courier.Channel, handler cour
 					assert.Equal(t, tc.ExpectedExternalID, msg.ExternalID())
 				}
 				assert.Equal(t, tc.ExpectedURN, msg.URN())
-				assert.Equal(t, urns.URN(tc.ExpectedNewURN), msg.NewURN())
 			} else {
 				assert.Empty(t, mb.WrittenMsgs(), "unexpected msg written")
 			}
@@ -210,7 +205,7 @@ func RunIncomingTestCases(t *testing.T, channels []courier.Channel, handler cour
 				actualStatus := actualStatuses[i]
 
 				assert.Equal(t, expectedStatus.MsgUUID, actualStatus.MsgUUID(), "msg uuid mismatch for update %d", i)
-				assert.Equal(t, expectedStatus.ExternalID, actualStatus.ExternalID(), "external id mismatch for update %d", i)
+				assert.Equal(t, expectedStatus.ExternalID, actualStatus.ExternalIdentifier(), "external identifier mismatch for update %d", i)
 				assert.Equal(t, expectedStatus.Status, actualStatus.Status(), "status value mismatch for update %d", i)
 			}
 
@@ -233,6 +228,15 @@ func RunIncomingTestCases(t *testing.T, channels []courier.Channel, handler cour
 
 			if tc.ExpectedContactName != nil {
 				require.Equal(*tc.ExpectedContactName, mb.LastContactName())
+			}
+
+			if tc.ExpectedMsgText != nil || tc.ExpectedAttachments != nil {
+				msg := mb.WrittenMsgs()[0].(*test.MockMsg)
+				if tc.ExpectedNewURN != nil {
+					assert.Equal(t, tc.ExpectedNewURN, msg.NewURN(), "new URN mismatch")
+				} else {
+					assert.Nil(t, msg.NewURN(), "unexpected new URN on message")
+				}
 			}
 
 			assert.Equal(t, tc.ExpectedURNAuthTokens, mb.URNAuthTokens())
@@ -323,6 +327,7 @@ type OutgoingTestCase struct {
 	MsgUserID               models.UserID
 	MsgOrigin               models.MsgOrigin
 	MsgContactLastSeenOn    *time.Time
+	MsgContactOtherURNs     []urns.URN
 
 	MockResponses map[string][]*httpx.MockResponse
 
@@ -331,7 +336,6 @@ type OutgoingTestCase struct {
 	ExpectedError       error
 	ExpectedLogErrors   []*clogs.Error
 	ExpectedContactURNs map[string]bool
-	ExpectedNewURN      string
 }
 
 // Msg creates the test message for this test case
@@ -341,7 +345,7 @@ func (tc *OutgoingTestCase) Msg(mb *test.MockBackend, ch courier.Channel) courie
 		msgOrigin = tc.MsgOrigin
 	}
 
-	c := &models.ContactReference{ID: 100, UUID: "a984069d-0008-4d8c-a772-b14a8a6acccc", LastSeenOn: tc.MsgContactLastSeenOn}
+	c := &models.ContactReference{ID: 100, UUID: "a984069d-0008-4d8c-a772-b14a8a6acccc", LastSeenOn: tc.MsgContactLastSeenOn, OtherURNs: tc.MsgContactOtherURNs}
 	m := mb.NewOutgoingMsg(ch, "0191e180-7d60-7000-aded-7d8b151cbd5b", c, urns.URN(tc.MsgURN), tc.MsgText, tc.MsgHighPriority, tc.MsgQuickReplies, tc.MsgResponseToExternalID, msgOrigin).(*test.MockMsg)
 	m.WithLocale(tc.MsgLocale)
 	m.WithUserID(tc.MsgUserID)
@@ -376,6 +380,10 @@ func RunOutgoingTestCases(t *testing.T, channel courier.Channel, handler courier
 	mb.AddChannel(channel)
 	handler.Initialize(s)
 
+	// the test runtime shares one HTTP client between HTTP and HTTPProxied, so installing a mocking
+	// transport on it intercepts every request a handler makes via either client
+	rt := s.Runtime()
+
 	for _, tc := range testCases {
 		mb.Reset()
 
@@ -384,12 +392,15 @@ func RunOutgoingTestCases(t *testing.T, channel courier.Channel, handler courier
 
 			msg := tc.Msg(mb, channel)
 
-			var mockHTTP *httpx.MockRequestor
+			var mockHTTP *httpx.MocksTransport
 			actualRequests := make([]*http.Request, 0, 1)
 
+			// reset to the default transport each case, then install a mocking transport when the
+			// case provides mocks
+			rt.HTTP.Transport = nil
 			if len(tc.MockResponses) > 0 {
-				mockHTTP = httpx.NewMockRequestor(tc.MockResponses).Clone()
-				httpx.SetRequestor(mockHTTP)
+				mockHTTP = httpx.WithMocks(nil, tc.MockResponses)
+				rt.HTTP.Transport = mockHTTP
 			}
 
 			clog := courier.NewChannelLogForSend(msg, handler.RedactValues(channel))
@@ -398,10 +409,9 @@ func RunOutgoingTestCases(t *testing.T, channel courier.Channel, handler courier
 			res := &courier.SendResult{}
 			serr := handler.Send(ctx, msg, res, clog)
 			externalIDs := res.ExternalIDs()
-			resNewURN := res.GetNewURN()
 
 			if mockHTTP != nil {
-				httpx.SetRequestor(httpx.DefaultRequestor)
+				rt.HTTP.Transport = nil
 
 				actualRequests = mockHTTP.Requests()
 
@@ -425,10 +435,15 @@ func RunOutgoingTestCases(t *testing.T, channel courier.Channel, handler courier
 			assert.Equal(t, tc.ExpectedError, serr, "send method error mismatch")
 			assert.Equal(t, append([]*clogs.Error{}, tc.ExpectedLogErrors...), clog.Errors, "channel log errors mismatch")
 
+			// simulate OnSendComplete so the backend can process send results (e.g. new URNs)
+			status := mb.NewStatusUpdate(channel, msg.UUID(), models.MsgStatusWired, clog)
+			mb.OnSendComplete(ctx, msg, status, res, clog)
+
 			if tc.ExpectedContactURNs != nil {
 				var contactUUID models.ContactUUID
 				for urn, shouldBePresent := range tc.ExpectedContactURNs {
-					contact, _ := mb.GetContact(ctx, channel, urns.URN(urn), nil, "", true, clog)
+					contact, err := mb.GetContact(ctx, channel, urns.URN(urn), nil, "", true, clog)
+					require.NoError(err, "unexpected error getting contact for URN %s", urn)
 					if contactUUID == models.NilContactUUID && shouldBePresent {
 						contactUUID = contact.UUID()
 					}
@@ -439,10 +454,6 @@ func RunOutgoingTestCases(t *testing.T, channel courier.Channel, handler courier
 					}
 
 				}
-			}
-
-			if tc.ExpectedNewURN != "" {
-				require.Equal(urns.URN(tc.ExpectedNewURN), resNewURN)
 			}
 
 			AssertChannelLogRedaction(t, clog, checkRedacted)

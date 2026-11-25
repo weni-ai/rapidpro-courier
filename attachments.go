@@ -3,6 +3,7 @@ package courier
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -14,9 +15,10 @@ import (
 	"strings"
 
 	"github.com/h2non/filetype"
-	"github.com/nyaruka/courier/core/models"
-	"github.com/nyaruka/courier/utils"
-	"github.com/nyaruka/courier/utils/clogs"
+	"github.com/nyaruka/courier/v26/core/models"
+	"github.com/nyaruka/courier/v26/runtime"
+	"github.com/nyaruka/courier/v26/utils"
+	"github.com/nyaruka/courier/v26/utils/clogs"
 	"github.com/nyaruka/gocommon/httpx"
 )
 
@@ -42,7 +44,7 @@ type fetchAttachmentResponse struct {
 	LogUUID    clogs.UUID  `json:"log_uuid"`
 }
 
-func fetchAttachment(ctx context.Context, b Backend, r *http.Request) (*fetchAttachmentResponse, error) {
+func fetchAttachment(ctx context.Context, rt *runtime.Runtime, b Backend, r *http.Request) (*fetchAttachmentResponse, error) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		return nil, fmt.Errorf("error reading request body: %w", err)
@@ -63,7 +65,7 @@ func fetchAttachment(ctx context.Context, b Backend, r *http.Request) (*fetchAtt
 
 	clog := NewChannelLogForAttachmentFetch(ch, GetHandler(ch.ChannelType()).RedactValues(ch))
 
-	attachment, err := FetchAndStoreAttachment(ctx, b, ch, fa.URL, clog)
+	attachment, err := FetchAndStoreAttachment(ctx, rt, b, ch, fa.URL, clog)
 
 	// try to write channel log even if we have an error
 	clog.End()
@@ -78,7 +80,7 @@ func fetchAttachment(ctx context.Context, b Backend, r *http.Request) (*fetchAtt
 	return &fetchAttachmentResponse{Attachment: attachment, LogUUID: clog.UUID}, nil
 }
 
-func FetchAndStoreAttachment(ctx context.Context, b Backend, channel Channel, attURL string, clog *ChannelLog) (*Attachment, error) {
+func FetchAndStoreAttachment(ctx context.Context, rt *runtime.Runtime, b Backend, channel Channel, attURL string, clog *ChannelLog) (*Attachment, error) {
 	parsedURL, err := url.Parse(attURL)
 	if err != nil {
 		return nil, fmt.Errorf("unable to parse attachment url '%s': %w", attURL, err)
@@ -89,7 +91,7 @@ func FetchAndStoreAttachment(ctx context.Context, b Backend, channel Channel, at
 	handler := GetHandler(channel.ChannelType())
 	builder, isBuilder := handler.(AttachmentRequestBuilder)
 	if isBuilder {
-		attRequest, err = builder.BuildAttachmentRequest(ctx, b, channel, parsedURL.String(), clog)
+		attRequest, err = builder.BuildAttachmentRequest(ctx, channel, parsedURL.String(), clog)
 	} else {
 		attRequest, err = http.NewRequest(http.MethodGet, attURL, nil)
 	}
@@ -97,15 +99,19 @@ func FetchAndStoreAttachment(ctx context.Context, b Backend, channel Channel, at
 		return nil, fmt.Errorf("unable to create attachment request: %w", err)
 	}
 
-	trace, err := httpx.DoTrace(b.HttpClient(true), attRequest, nil, b.HttpAccess(), maxAttBodyReadBytes)
+	// attachment URLs are untrusted, so bound the body read at maxAttBodyReadBytes — TraceHTTP surfaces
+	// an oversized body as httpx.ErrResponseSize. access control (the SSRF blocklist) is enforced by
+	// rt.HTTP's transport, so a denied request comes back as an error with a nil response.
+	trace, resp, err := utils.TraceHTTP(rt.HTTP, attRequest, maxAttBodyReadBytes)
 	if trace != nil {
 		clog.HTTP(trace)
+	}
 
-		// if we got a non-200 response, return the attachment with a pseudo content type which tells the caller
-		// to continue without the attachment
-		if trace.Response == nil || trace.Response.StatusCode/100 != 2 || err == httpx.ErrResponseSize || err == httpx.ErrAccessConfig {
-			return &Attachment{ContentType: "unavailable", URL: attURL}, nil
-		}
+	// if we didn't get a usable 2xx response — connection failure, access denied, a non-2xx status, or
+	// a body exceeding the size limit — return a pseudo content type which tells the caller to continue
+	// without the attachment
+	if resp == nil || resp.StatusCode/100 != 2 || errors.Is(err, httpx.ErrResponseSize) || errors.Is(err, httpx.ErrAccessConfig) {
+		return &Attachment{ContentType: "unavailable", URL: attURL}, nil
 	}
 	if err != nil {
 		return nil, err

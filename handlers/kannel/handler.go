@@ -8,16 +8,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nyaruka/courier"
-	"github.com/nyaruka/courier/core/models"
-	"github.com/nyaruka/courier/handlers"
+	"github.com/nyaruka/courier/v26"
+	"github.com/nyaruka/courier/v26/core/models"
+	"github.com/nyaruka/courier/v26/handlers"
 	"github.com/nyaruka/gocommon/gsm7"
 	"github.com/nyaruka/gocommon/urns"
+	"golang.org/x/text/encoding/unicode"
 )
 
 const (
 	configEncoding   = "encoding"
-	configVerifySSL  = "verify_ssl"
 	configDLRMask    = "dlr_mask"
 	configIgnoreSent = "ignore_sent"
 
@@ -43,7 +43,7 @@ func newHandler() courier.ChannelHandler {
 }
 
 // Initialize is called by the engine once everything is loaded
-func (h *handler) Initialize(s courier.Server) error {
+func (h *handler) Initialize(s *courier.Server) error {
 	h.SetServer(s)
 	s.AddHandlerRoute(h, http.MethodPost, "receive", courier.ChannelLogTypeMsgReceive, h.receiveMessage)
 	s.AddHandlerRoute(h, http.MethodGet, "status", courier.ChannelLogTypeMsgReceive, h.receiveStatus)
@@ -131,7 +131,7 @@ func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.Sen
 	}
 	dlrMask := msg.Channel().StringConfigForKey(configDLRMask, defaultDLRMask)
 
-	callbackDomain := msg.Channel().CallbackDomain(h.Server().Config().Domain)
+	callbackDomain := msg.Channel().CallbackDomain(h.Runtime().Config.Domain)
 	dlrURL := fmt.Sprintf("https://%s/c/kn/%s/status?uuid=%s&status=%%d", callbackDomain, msg.Channel().UUID(), msg.UUID())
 
 	// build our request
@@ -170,10 +170,17 @@ func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.Sen
 		}
 	}
 
-	// if we are UTF8, set our coding appropriately
+	// if we are unicode, encode the body to UTF-16BE (UCS-2) ourselves and don't send a charset param - that way
+	// kannel skips its server-side recode entirely (which fails with "Charset or body misformed, rejected" on
+	// builds compiled without iconv) and passes our already-encoded body straight through as coding=2 / UCS-2
 	if encoding == encodingUnicode {
+		encoder := unicode.UTF16(unicode.BigEndian, unicode.IgnoreBOM).NewEncoder()
+		utf16beText, err := encoder.String(handlers.GetTextAndAttachments(msg))
+		if err != nil {
+			return err
+		}
 		form["coding"] = []string{"2"}
-		form["charset"] = []string{"utf8"}
+		form["text"] = []string{utf16beText}
 	}
 
 	// our send URL may have form parameters in it already, append our own afterwards
@@ -184,22 +191,12 @@ func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.Sen
 		sendURL = fmt.Sprintf("%s?%s", sendURL, encodedForm)
 	}
 
-	// ignore SSL warnings if they ask
-	verifySSLStr := msg.Channel().ConfigForKey(configVerifySSL, true)
-	verifySSL, _ := verifySSLStr.(bool)
-
 	req, err := http.NewRequest(http.MethodGet, sendURL, nil)
 	if err != nil {
 		return err
 	}
 
-	var resp *http.Response
-	if verifySSL {
-		resp, _, err = h.RequestHTTP(req, clog)
-	} else {
-		resp, _, err = h.RequestHTTPInsecure(req, clog)
-	}
-
+	resp, _, err := h.RequestHTTP(req, clog)
 	if err != nil || resp.StatusCode/100 == 5 {
 		return courier.ErrConnectionFailed
 	} else if resp.StatusCode/100 != 2 {

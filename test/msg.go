@@ -3,8 +3,8 @@ package test
 import (
 	"time"
 
-	"github.com/nyaruka/courier"
-	"github.com/nyaruka/courier/core/models"
+	"github.com/nyaruka/courier/v26"
+	"github.com/nyaruka/courier/v26/core/models"
 	"github.com/nyaruka/gocommon/i18n"
 	"github.com/nyaruka/gocommon/urns"
 	"github.com/nyaruka/gocommon/uuids"
@@ -36,7 +36,7 @@ type MockMsg struct {
 
 	receivedOn *time.Time
 	sentOn     *time.Time
-	newURN     urns.URN
+	newURN     *models.NewURNSpec
 }
 
 func NewMockMsg(uuid models.MsgUUID, channel courier.Channel, urn urns.URN, text string, attachments []string) *MockMsg {
@@ -85,8 +85,11 @@ func (m *MockMsg) WithURNAuthTokens(tokens map[string]string) courier.MsgIn {
 	return m
 }
 func (m *MockMsg) WithReceivedOn(date time.Time) courier.MsgIn { m.receivedOn = &date; return m }
-func (m *MockMsg) WithNewURN(urn urns.URN) courier.MsgIn       { m.newURN = urn; return m }
-func (m *MockMsg) NewURN() urns.URN                            { return m.newURN }
+func (m *MockMsg) WithNewURN(urn urns.URN, action models.NewURNAction) courier.MsgIn {
+	m.newURN = &models.NewURNSpec{Value: urn, Action: action}
+	return m
+}
+func (m *MockMsg) NewURN() *models.NewURNSpec { return m.newURN }
 
 // used to create outgoing messages for testing
 func (m *MockMsg) WithUUID(uuid models.MsgUUID) courier.MsgOut        { m.uuid = uuid; return m }
@@ -96,3 +99,6 @@ func (m *MockMsg) WithOptIn(o *models.OptInReference) courier.MsgOut  { m.optIn 
 func (m *MockMsg) WithUserID(uid models.UserID) courier.MsgOut        { m.userID = uid; return m }
 func (m *MockMsg) WithLocale(lc i18n.Locale) courier.MsgOut           { m.locale = lc; return m }
 func (m *MockMsg) WithURNAuth(token string) courier.MsgOut            { m.urnAuth = token; return m }
+
+// SetQuickReplies sets the quick replies for the message
+func (m *MockMsg) SetQuickReplies(qrs []models.QuickReply) { m.quickReplies = qrs }

@@ -1,24 +1,17 @@
 package messangi
 
 import (
-	"encoding/json"
 	"testing"
 
-	"github.com/nyaruka/courier"
-	"github.com/nyaruka/courier/core/models"
-	. "github.com/nyaruka/courier/handlers"
-	"github.com/nyaruka/courier/test"
-	"github.com/nyaruka/courier/utils/clogs"
+	"github.com/nyaruka/courier/v26"
+	. "github.com/nyaruka/courier/v26/handlers"
+	"github.com/nyaruka/courier/v26/test"
 	"github.com/nyaruka/gocommon/httpx"
 	"github.com/nyaruka/gocommon/urns"
-	"github.com/stretchr/testify/assert"
 )
 
 var testChannels = []courier.Channel{
-	test.NewMockChannel("8eb23e93-5ecb-45ba-b726-3b064e0c56ab", "MG", "12345", "BR", []string{urns.Phone.Prefix},
-		map[string]any{
-			models.ConfigAuthToken: "test-auth-token",
-		}),
+	test.NewMockChannel("8eb23e93-5ecb-45ba-b726-3b064e0c56ab", "MG", "2020", "JM", []string{urns.Phone.Prefix}, nil),
 }
 
 const (
@@ -29,164 +22,109 @@ var testCases = []IncomingTestCase{
 	{
 		Label:                "Receive Valid",
 		URL:                  receiveURL,
-		Data:                 `{"owner":"empresa","date":"2025-05-23T14:30:00Z","processId":"abc123","origin":"12345","externalId":"campanha_001","callback":"https://suaapi.com/messangi/mo","connection":"SMS","id":"usuario_456","text":"Olá, quero participar","user":"+5588999999999","extraInfo":null}`,
+		Data:                 "mo=Msg&mobile=18765422035",
 		ExpectedRespStatus:   200,
 		ExpectedBodyContains: "Message Accepted",
-		ExpectedMsgText:      Sp("Olá, quero participar"),
-		ExpectedURN:          "tel:+5588999999999",
-		ExpectedExternalID:   "usuario_456",
-	},
+		ExpectedMsgText:      Sp("Msg"),
+		ExpectedURN:          "tel:+18765422035"},
 	{
-		Label:                "Receive Valid Numeric ProcessID",
+		Label:                "Receive Missing Number",
 		URL:                  receiveURL,
-		Data:                 `{"owner":"unicef","date":"2026-08-31T12:37:56.844453949Z","processId":11685,"origin":"18768384897","externalId":null,"callback":"https://rapidpro.ilhasoft.mobi/c/mg/8eb23e93-5ecb-45ba-b726-3b064e0c56ab/receive","connection":"MSGI_PROD_FlowManuId","id":"4eccf3ac21514a21888d4e67216850df","text":"d","user":"+5588999999999","extraInfo":null}`,
-		ExpectedRespStatus:   200,
-		ExpectedBodyContains: "Message Accepted",
-		ExpectedMsgText:      Sp("d"),
-		ExpectedURN:          "tel:+5588999999999",
-		ExpectedExternalID:   "4eccf3ac21514a21888d4e67216850df",
-	},
-	{
-		Label:                "Receive Valid Null ProcessID",
-		URL:                  receiveURL,
-		Data:                 `{"owner":"empresa","date":"2025-05-23T14:30:00Z","processId":null,"origin":"12345","externalId":null,"callback":"https://suaapi.com/messangi/mo","connection":"SMS","id":"usuario_456","text":"Olá, quero participar","user":"+5588999999999","extraInfo":null}`,
-		ExpectedRespStatus:   200,
-		ExpectedBodyContains: "Message Accepted",
-		ExpectedMsgText:      Sp("Olá, quero participar"),
-		ExpectedURN:          "tel:+5588999999999",
-		ExpectedExternalID:   "usuario_456",
-	},
-	{
-		Label:                "Receive Missing User",
-		URL:                  receiveURL,
-		Data:                 `{"text":"Hello"}`,
+		Data:                 "mo=Msg",
 		ExpectedRespStatus:   400,
-		ExpectedBodyContains: "missing required field 'user'",
-	},
-	{
-		Label:                "Receive Missing Text",
-		URL:                  receiveURL,
-		Data:                 `{"user":"+5588999999999"}`,
-		ExpectedRespStatus:   400,
-		ExpectedBodyContains: "missing required field 'text'",
-	},
+		ExpectedBodyContains: "required field 'mobile'"},
 }
 
 func TestIncoming(t *testing.T) {
 	RunIncomingTestCases(t, testChannels, newHandler(), testCases)
 }
 
-func TestFlexibleStringUnmarshal(t *testing.T) {
-	tests := []struct {
-		json     string
-		expected flexibleString
-		wantErr  bool
-	}{
-		{`"abc123"`, "abc123", false},
-		{`11685`, "11685", false},
-		{`null`, "", false},
-		{`true`, "", true},
-		{`{}`, "", true},
-	}
-
-	for _, tc := range tests {
-		var got flexibleString
-		err := json.Unmarshal([]byte(tc.json), &got)
-		if tc.wantErr {
-			assert.Error(t, err, "json %s", tc.json)
-			continue
-		}
-		assert.NoError(t, err, "json %s", tc.json)
-		assert.Equal(t, tc.expected, got, "json %s", tc.json)
-	}
-}
-
 var defaultSendTestCases = []OutgoingTestCase{
 	{
 		Label:   "Plain Send",
 		MsgText: "Simple Message ☺",
-		MsgURN:  "tel:+5588999999999",
+		MsgURN:  "tel:+18765422035",
 		MockResponses: map[string][]*httpx.MockResponse{
-			"https://elastic.messangi.me/raven/v2/messages": {
-				httpx.NewMockResponse(200, nil, []byte(`{"status":"ACCEPTED","messageId":"abc123-def456-ghi789","description":"Message accepted for delivery"}`)),
+			"https://flow.messangi.me/mmc/rest/api/sendMT/*": {
+				httpx.NewMockResponse(200, nil, []byte(`<response><input>sendMT</input><status>OK</status><description>Completed</description></response>`)),
 			},
 		},
 		ExpectedRequests: []ExpectedRequest{{
-			Headers: map[string]string{
-				"Content-Type":  "application/json",
-				"Authorization": "Bearer test-auth-token",
-			},
-			Body: `{"from":"12345","text":"Simple Message ☺","to":"5588999999999","type":"MT"}`,
+			Path: "/mmc/rest/api/sendMT/7/2020/2/18765422035/U2ltcGxlIE1lc3NhZ2Ug4pi6/my-public-key/f69bc6a924480d3ed82970d9679c4be90589bd3064add51c47e8bf50a211d55f",
 		}},
-		ExpectedExtIDs: []string{"abc123-def456-ghi789"},
 	},
 	{
-		Label:   "Send Error Response",
-		MsgText: "Error Message",
-		MsgURN:  "tel:+5588999999999",
+		Label:   "Long Send",
+		MsgText: "This is a longer message than 160 characters and will cause us to split it into two separate parts, isn't that right but it is even longer than before I say, I need to keep adding more things to make it work",
+		MsgURN:  "tel:+18765422035",
 		MockResponses: map[string][]*httpx.MockResponse{
-			"https://elastic.messangi.me/raven/v2/messages": {
-				httpx.NewMockResponse(200, nil, []byte(`{"status":"REJECTED","messageId":"","description":"Invalid recipient number"}`)),
+			"https://flow.messangi.me/mmc/rest/api/sendMT/*": {
+				httpx.NewMockResponse(200, nil, []byte(`<response><input>sendMT</input><status>OK</status><description>Completed</description></response>`)),
+				httpx.NewMockResponse(200, nil, []byte(`<response><input>sendMT</input><status>OK</status><description>Completed</description></response>`)),
+			},
+		},
+		ExpectedRequests: []ExpectedRequest{
+			{
+				Path: "/mmc/rest/api/sendMT/7/2020/2/18765422035/VGhpcyBpcyBhIGxvbmdlciBtZXNzYWdlIHRoYW4gMTYwIGNoYXJhY3RlcnMgYW5kIHdpbGwgY2F1c2UgdXMgdG8gc3BsaXQgaXQgaW50byB0d28gc2VwYXJhdGUgcGFydHMsIGlzbid0IHRoYXQgcmlnaHQgYnV0IGl0IGlzIGV2ZW4gbG9uZ2VyIHRoYW4gYmVmb3JlIEkgc2F5LA/my-public-key/48c658e8db8635843ac3d3e497a81cf79cc0d75b8630dae03c6e7d93a749ab90",
+			},
+			{
+				Path: "/mmc/rest/api/sendMT/7/2020/2/18765422035/SSBuZWVkIHRvIGtlZXAgYWRkaW5nIG1vcmUgdGhpbmdzIHRvIG1ha2UgaXQgd29yaw/my-public-key/ba305915a6cf56c1255071655de42b4408071460317bb5bf3419bb9f865c5078",
+			},
+		},
+	},
+	{
+		Label:          "Send Attachment",
+		MsgText:        "My pic!",
+		MsgURN:         "tel:+18765422035",
+		MsgAttachments: []string{"image/jpeg:https://foo.bar/image.jpg"},
+		MockResponses: map[string][]*httpx.MockResponse{
+			"https://flow.messangi.me/mmc/rest/api/sendMT/*": {
+				httpx.NewMockResponse(200, nil, []byte(`<response><input>sendMT</input><status>OK</status><description>Completed</description></response>`)),
 			},
 		},
 		ExpectedRequests: []ExpectedRequest{{
-			Headers: map[string]string{
-				"Content-Type":  "application/json",
-				"Authorization": "Bearer test-auth-token",
-			},
-			Body: `{"from":"12345","text":"Error Message","to":"5588999999999","type":"MT"}`,
+			Path: "/mmc/rest/api/sendMT/7/2020/2/18765422035/TXkgcGljIQpodHRwczovL2Zvby5iYXIvaW1hZ2UuanBn/my-public-key/4babdf316c0b5c7b6b40855329b421b1da1b8e63690d59eb5c231049dc4067fd",
 		}},
-		ExpectedLogErrors: []*clogs.Error{
-			&clogs.Error{Code: "messangi_error", Message: "Messangi API error: Invalid recipient number"},
+	},
+	{
+		Label:   "Invalid Parameters",
+		MsgText: "Invalid Parameters",
+		MsgURN:  "tel:+18765422035",
+		MockResponses: map[string][]*httpx.MockResponse{
+			"https://flow.messangi.me/mmc/rest/api/sendMT/*": {
+				httpx.NewMockResponse(404, nil, []byte(``)),
+			},
 		},
+		ExpectedRequests: []ExpectedRequest{{
+			Path: "/mmc/rest/api/sendMT/7/2020/2/18765422035/SW52YWxpZCBQYXJhbWV0ZXJz/my-public-key/f3d2ea825cf61226925dee2db3c14b7fc00f3183f11809d2183d1e2dbd230df6",
+		}},
 		ExpectedError: courier.ErrResponseStatus,
 	},
 	{
-		Label:   "Connection Error",
-		MsgText: "Connection Error",
-		MsgURN:  "tel:+5588999999999",
+		Label:   "Error Response",
+		MsgText: "Error Response",
+		MsgURN:  "tel:+18765422035",
 		MockResponses: map[string][]*httpx.MockResponse{
-			"https://elastic.messangi.me/raven/v2/messages": {
-				httpx.NewMockResponse(500, nil, []byte(`Internal Server Error`)),
+			"https://flow.messangi.me/mmc/rest/api/sendMT/*": {
+				httpx.NewMockResponse(200, nil, []byte(`<response><input>sendMT</input><status>ERROR</status><description>Completed</description></response>`)),
 			},
 		},
 		ExpectedRequests: []ExpectedRequest{{
-			Headers: map[string]string{
-				"Content-Type":  "application/json",
-				"Authorization": "Bearer test-auth-token",
-			},
-			Body: `{"from":"12345","text":"Connection Error","to":"5588999999999","type":"MT"}`,
+			Path: "/mmc/rest/api/sendMT/7/2020/2/18765422035/RXJyb3IgUmVzcG9uc2U/my-public-key/27f4c67fa00848ea6029cc0b1797aae6d05e2970ecb6e44ca486b463b933e61a",
 		}},
-		ExpectedError: courier.ErrConnectionFailed,
-	},
-	{
-		Label:   "Invalid JSON Response",
-		MsgText: "Invalid JSON",
-		MsgURN:  "tel:+5588999999999",
-		MockResponses: map[string][]*httpx.MockResponse{
-			"https://elastic.messangi.me/raven/v2/messages": {
-				httpx.NewMockResponse(200, nil, []byte(`invalid json response`)),
-			},
-		},
-		ExpectedRequests: []ExpectedRequest{{
-			Headers: map[string]string{
-				"Content-Type":  "application/json",
-				"Authorization": "Bearer test-auth-token",
-			},
-			Body: `{"from":"12345","text":"Invalid JSON","to":"5588999999999","type":"MT"}`,
-		}},
-		ExpectedLogErrors: []*clogs.Error{
-			&clogs.Error{Code: "response_unparseable", Message: "Unable to parse response body from Messangi"},
-		},
-		ExpectedError: courier.ErrResponseUnparseable,
+		ExpectedError: courier.ErrResponseStatus,
 	},
 }
 
 func TestOutgoing(t *testing.T) {
-	var defaultChannel = test.NewMockChannel("8eb23e93-5ecb-45ba-b726-3b064e0c56ab", "MG", "12345", "BR",
+	maxMsgLength = 160
+	var defaultChannel = test.NewMockChannel("8eb23e93-5ecb-45ba-b726-3b064e0c56ab", "MG", "2020", "JM",
 		[]string{urns.Phone.Prefix},
 		map[string]any{
-			models.ConfigAuthToken: "test-auth-token",
+			"public_key":  "my-public-key",
+			"private_key": "my-private-key",
+			"instance_id": 7,
+			"carrier_id":  2,
 		})
-	RunOutgoingTestCases(t, defaultChannel, newHandler(), defaultSendTestCases, []string{"test-auth-token"}, nil)
+	RunOutgoingTestCases(t, defaultChannel, newHandler(), defaultSendTestCases, []string{"my-private-key"}, nil)
 }

@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/gomodule/redigo/redis"
-	"github.com/nyaruka/courier/core/models"
+	"github.com/nyaruka/courier/v26/core/models"
 	"github.com/nyaruka/gocommon/jsonx"
 	"github.com/nyaruka/vkutil/queues"
 )
@@ -26,7 +26,6 @@ func queueMsgHandling(ctx context.Context, rc redis.Conn, c *models.Contact, m *
 		"attachments":     m.Attachments(),
 		"new_contact":     c.IsNew_,
 	}
-
 	if m.NewURN_ != nil {
 		body["new_urn"] = m.NewURN_
 	}
@@ -43,7 +42,6 @@ func queueEventHandling(ctx context.Context, rc redis.Conn, c *models.Contact, e
 		"extra":       e.Extra(),
 		"new_contact": c.IsNew_,
 		"occurred_on": e.OccurredOn_,
-		"created_on":  e.CreatedOn_,
 	}
 	if e.OptInID_ != 0 {
 		body["optin_id"] = e.OptInID_

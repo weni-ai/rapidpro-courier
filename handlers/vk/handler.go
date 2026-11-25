@@ -15,11 +15,10 @@ import (
 	"time"
 
 	"github.com/buger/jsonparser"
-	"github.com/nyaruka/courier"
-	"github.com/nyaruka/courier/core/models"
-	"github.com/nyaruka/courier/handlers"
-	"github.com/nyaruka/courier/utils"
-	"github.com/nyaruka/gocommon/httpx"
+	"github.com/nyaruka/courier/v26"
+	"github.com/nyaruka/courier/v26/core/models"
+	"github.com/nyaruka/courier/v26/handlers"
+	"github.com/nyaruka/courier/v26/utils"
 	"github.com/nyaruka/gocommon/jsonx"
 	"github.com/nyaruka/gocommon/urns"
 )
@@ -89,7 +88,7 @@ func newHandler() courier.ChannelHandler {
 	return &handler{handlers.NewBaseHandler(models.ChannelType("VK"), "VK")}
 }
 
-func (h *handler) Initialize(s courier.Server) error {
+func (h *handler) Initialize(s *courier.Server) error {
 	h.SetServer(s)
 	s.AddHandlerRoute(h, http.MethodPost, "receive", courier.ChannelLogTypeUnknown, handlers.JSONPayload(h, h.receiveEvent))
 	return nil
@@ -385,8 +384,8 @@ func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.Sen
 	params.Set(paramMessage, text)
 	params.Set(paramAttachments, attachments)
 
-	if len(msg.QuickReplies()) != 0 {
-		qrs := msg.QuickReplies()
+	qrs := msg.QuickReplies()
+	if len(qrs) != 0 {
 		keyboard := NewKeyboardFromReplies(qrs)
 
 		params.Set(paramKeyboard, string(jsonx.MustMarshal(keyboard)))
@@ -522,7 +521,8 @@ func (h *handler) downloadMedia(mediaURL string) (io.Reader, error) {
 		return nil, err
 	}
 
-	if res, err := httpx.Do(h.Backend().HttpClient(true), req, nil, nil); err == nil {
+	// access control is enforced by the client's transport
+	if res, err := h.Runtime().HTTP.Do(req); err == nil {
 		return res.Body, nil
 	} else {
 		return nil, err

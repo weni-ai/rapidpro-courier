@@ -6,9 +6,9 @@ import (
 	"testing"
 
 	"github.com/gomodule/redigo/redis"
-	"github.com/nyaruka/courier"
-	. "github.com/nyaruka/courier/handlers"
-	"github.com/nyaruka/courier/test"
+	"github.com/nyaruka/courier/v26"
+	. "github.com/nyaruka/courier/v26/handlers"
+	"github.com/nyaruka/courier/v26/test"
 	"github.com/nyaruka/gocommon/httpx"
 	"github.com/nyaruka/gocommon/urns"
 )
@@ -177,6 +177,26 @@ var sendTestCases = []OutgoingTestCase{
 			Body: `{"mobile":"250788383383","message":"Error","senderid":"2020","mType":-1,"eType":-1,"UDH":""}`,
 		}},
 		ExpectedError: courier.ErrConnectionFailed,
+	},
+	{
+		Label:   "Null MessageID",
+		MsgText: "Hello",
+		MsgURN:  "tel:+250788383383",
+		MockResponses: map[string][]*httpx.MockResponse{
+			"https://smsapi.hormuud.com/api/SendSMS": {
+				httpx.NewMockResponse(200, nil, []byte(`{"ResCode": "res", "ResMsg": "msg", "Data": { "MessageID": "null", "Description": "accepted" } }`)),
+			},
+		},
+		ExpectedRequests: []ExpectedRequest{
+			{
+				Headers: map[string]string{
+					"Content-Type":  "application/json",
+					"Accept":        "application/json",
+					"Authorization": "Bearer ghK_Wt4lshZhN",
+				},
+				Body: `{"mobile":"250788383383","message":"Hello","senderid":"2020","mType":-1,"eType":-1,"UDH":""}`,
+			},
+		},
 	},
 }
 

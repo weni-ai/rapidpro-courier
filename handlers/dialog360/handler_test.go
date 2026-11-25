@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nyaruka/courier"
-	"github.com/nyaruka/courier/core/models"
-	. "github.com/nyaruka/courier/handlers"
-	"github.com/nyaruka/courier/test"
-	"github.com/nyaruka/courier/utils/clogs"
+	"github.com/nyaruka/courier/v26"
+	"github.com/nyaruka/courier/v26/core/models"
+	. "github.com/nyaruka/courier/v26/handlers"
+	"github.com/nyaruka/courier/v26/test"
+	"github.com/nyaruka/courier/v26/utils/clogs"
 	"github.com/nyaruka/gocommon/httpx"
 	"github.com/nyaruka/gocommon/urns"
 	"github.com/stretchr/testify/assert"
@@ -60,9 +60,9 @@ var testCasesD3C = []IncomingTestCase{
 		NoInvalidChannelCheck: true,
 		ExpectedMsgText:       Sp("Hello World"),
 		ExpectedURN:           "whatsapp:5678",
-		ExpectedNewURN:        "whatsapp:US.1234",
 		ExpectedExternalID:    "external_id",
 		ExpectedDate:          time.Date(2016, 1, 30, 1, 57, 9, 0, time.UTC),
+		ExpectedNewURN:        &models.NewURNSpec{Value: "whatsapp:US.1234", Action: models.NewURNAppend},
 	},
 	{
 		Label:                 "Receive Message WAC with invalid user_id, no new URN added",
@@ -90,27 +90,6 @@ var testCasesD3C = []IncomingTestCase{
 		ExpectedContactName:   Sp("Kerry Fisher"),
 		ExpectedExternalID:    "external_id",
 		ExpectedDate:          time.Date(2016, 1, 30, 1, 57, 9, 0, time.UTC),
-	},
-	{
-		Label:                 "Receive Message WAC with BSUID in from",
-		URL:                   d3CReceiveURL,
-		Data:                  string(test.ReadFile("../meta/testdata/wac/hello_bsuid_in_from.json")),
-		ExpectedRespStatus:    200,
-		ExpectedBodyContains:  "Handled",
-		NoQueueErrorCheck:     true,
-		NoInvalidChannelCheck: true,
-		ExpectedMsgText:       Sp("Hello World"),
-		ExpectedURN:           "whatsapp:US.1234",
-		ExpectedContactName:   Sp("Kerry Fisher"),
-		ExpectedExternalID:    "external_id",
-		ExpectedDate:          time.Date(2016, 1, 30, 1, 57, 9, 0, time.UTC),
-	},
-	{
-		Label:                "Receive Message WAC with no from or from_user_id",
-		URL:                  d3CReceiveURL,
-		Data:                 string(test.ReadFile("../meta/testdata/wac/no_from.json")),
-		ExpectedRespStatus:   200,
-		ExpectedBodyContains: "invalid whatsapp id",
 	},
 	{
 		Label:                 "Receive Duplicate Valid Message",
@@ -219,6 +198,13 @@ var testCasesD3C = []IncomingTestCase{
 		ExpectedURN:          "whatsapp:5678",
 		ExpectedExternalID:   "external_id",
 		ExpectedDate:         time.Date(2016, 1, 30, 1, 57, 9, 0, time.UTC),
+	},
+	{
+		Label:                "Receive group Message WAC, ignored",
+		URL:                  d3CReceiveURL,
+		Data:                 string(test.ReadFile("../meta/testdata/wac/group_message.json")),
+		ExpectedRespStatus:   200,
+		ExpectedBodyContains: "ignoring group message",
 	},
 	{
 		Label:                "Receive Invalid JSON",
@@ -364,10 +350,8 @@ func TestIncoming(t *testing.T) {
 }
 
 func TestBuildAttachmentRequest(t *testing.T) {
-	mb := test.NewMockBackend()
-
 	d3CHandler := &handler{NewBaseHandler(models.ChannelType("D3C"), "360Dialog")}
-	req, _ := d3CHandler.BuildAttachmentRequest(context.Background(), mb, testChannels[0], "https://example.org/v1/media/41", nil)
+	req, _ := d3CHandler.BuildAttachmentRequest(context.Background(), testChannels[0], "https://example.org/v1/media/41", nil)
 	assert.Equal(t, "https://example.org/v1/media/41", req.URL.String())
 	assert.Equal(t, "the-auth-token", req.Header.Get("D360-API-KEY"))
 
@@ -414,11 +398,26 @@ var SendTestCasesD3C = []OutgoingTestCase{
 		MsgURN:  "whatsapp:250788123123",
 		MockResponses: map[string][]*httpx.MockResponse{
 			"https://waba-v2.360dialog.io/messages": {
-				httpx.NewMockResponse(200, nil, []byte(`{ "contacts": [{"input": "250788123123", "user_id": "US.1234"}], "messages": [{"id": "157b5e14568e8"}] }`)),
+				httpx.NewMockResponse(201, nil, []byte(`{ "contacts": [{"input": "250788123123", "user_id": "US.1234"}], "messages": [{"id": "157b5e14568e8"}] }`)),
 			},
 		},
 		ExpectedExtIDs: []string{"157b5e14568e8"},
-		ExpectedNewURN: "whatsapp:US.1234",
+		ExpectedContactURNs: map[string]bool{
+			"whatsapp:250788123123": true,
+			"whatsapp:US.1234":      true,
+		},
+	},
+	{
+		Label:               "Plain Send with user_id already on contact",
+		MsgText:             "Simple Message",
+		MsgURN:              "whatsapp:250788123123",
+		MsgContactOtherURNs: []urns.URN{"whatsapp:US.1234"},
+		MockResponses: map[string][]*httpx.MockResponse{
+			"https://waba-v2.360dialog.io/messages": {
+				httpx.NewMockResponse(201, nil, []byte(`{ "contacts": [{"input": "250788123123", "user_id": "US.1234"}], "messages": [{"id": "157b5e14568e8"}] }`)),
+			},
+		},
+		ExpectedExtIDs: []string{"157b5e14568e8"},
 	},
 	{
 		Label:   "Unicode Send",
@@ -565,7 +564,7 @@ var SendTestCasesD3C = []OutgoingTestCase{
 			},
 		},
 		ExpectedRequests: []ExpectedRequest{{
-			Body: `{"messaging_product":"whatsapp","recipient_type":"individual","to":"250788123123","type":"template","template":{"name":"revive_issue","language":{"policy":"deterministic","code":"en_US"},"components":[{"type":"header","parameters":[{"type":"image","text":"","image":{"link":"https://foo.bar/image.jpg"}}]},{"type":"body","parameters":[{"type":"text","text":"Chef"},{"type":"text","text":"tomorrow"}]}]}}`,
+			Body: `{"messaging_product":"whatsapp","recipient_type":"individual","to":"250788123123","type":"template","template":{"name":"revive_issue","language":{"policy":"deterministic","code":"en_US"},"components":[{"type":"header","parameters":[{"type":"image","image":{"link":"https://foo.bar/image.jpg"}}]},{"type":"body","parameters":[{"type":"text","text":"Chef"},{"type":"text","text":"tomorrow"}]}]}}`,
 		}},
 		ExpectedExtIDs: []string{"157b5e14568e8"},
 	},
@@ -573,7 +572,7 @@ var SendTestCasesD3C = []OutgoingTestCase{
 		Label:           "Interactive Button Message Send",
 		MsgText:         "Interactive Button Msg",
 		MsgURN:          "whatsapp:250788123123",
-		MsgQuickReplies: []models.QuickReply{{Text: "BUTTON1"}},
+		MsgQuickReplies: []models.QuickReply{{Type: "text", Text: "BUTTON1"}},
 		MockResponses: map[string][]*httpx.MockResponse{
 			"https://waba-v2.360dialog.io/messages": {
 				httpx.NewMockResponse(201, nil, []byte(`{ "messages": [{"id": "157b5e14568e8"}] }`)),
@@ -588,7 +587,7 @@ var SendTestCasesD3C = []OutgoingTestCase{
 		Label:           "Interactive List Message Send, QRs Extra",
 		MsgText:         "Interactive List Msg",
 		MsgURN:          "whatsapp:250788123123",
-		MsgQuickReplies: []models.QuickReply{{Text: "OPTION1", Extra: "This option is the most popular"}},
+		MsgQuickReplies: []models.QuickReply{{Type: "text", Text: "OPTION1", Extra: "This option is the most popular"}},
 		MockResponses: map[string][]*httpx.MockResponse{
 			"https://waba-v2.360dialog.io/messages": {
 				httpx.NewMockResponse(201, nil, []byte(`{ "messages": [{"id": "157b5e14568e8"}] }`)),
@@ -603,7 +602,7 @@ var SendTestCasesD3C = []OutgoingTestCase{
 		Label:           "Interactive List Message Send, QRs Extra Empty",
 		MsgText:         "Interactive QR Extra empty Msg",
 		MsgURN:          "whatsapp:250788123123",
-		MsgQuickReplies: []models.QuickReply{{Text: "OPTION1", Extra: ""}},
+		MsgQuickReplies: []models.QuickReply{{Type: "text", Text: "OPTION1", Extra: ""}},
 		MockResponses: map[string][]*httpx.MockResponse{
 			"https://waba-v2.360dialog.io/messages": {
 				httpx.NewMockResponse(201, nil, []byte(`{ "messages": [{"id": "157b5e14568e8"}] }`)),
@@ -618,7 +617,7 @@ var SendTestCasesD3C = []OutgoingTestCase{
 		Label:           "Interactive List Message Send",
 		MsgText:         "Interactive List Msg",
 		MsgURN:          "whatsapp:250788123123",
-		MsgQuickReplies: []models.QuickReply{{Text: "ROW1"}, {Text: "ROW2"}, {Text: "ROW3", Extra: "Third description"}, {Text: "ROW4"}},
+		MsgQuickReplies: []models.QuickReply{{Type: "text", Text: "ROW1"}, {Type: "text", Text: "ROW2"}, {Type: "text", Text: "ROW3", Extra: "Third description"}, {Type: "text", Text: "ROW4"}},
 		MockResponses: map[string][]*httpx.MockResponse{
 			"https://waba-v2.360dialog.io/messages": {
 				httpx.NewMockResponse(201, nil, []byte(`{ "messages": [{"id": "157b5e14568e8"}] }`)),
@@ -633,7 +632,7 @@ var SendTestCasesD3C = []OutgoingTestCase{
 		Label:           "Interactive List Message Send more than 10 QRs",
 		MsgText:         "Interactive List Msg",
 		MsgURN:          "whatsapp:250788123123",
-		MsgQuickReplies: []models.QuickReply{{Text: "ROW1"}, {Text: "ROW2"}, {Text: "ROW3"}, {Text: "ROW4"}, {Text: "ROW5"}, {Text: "ROW6"}, {Text: "ROW7"}, {Text: "ROW8"}, {Text: "ROW9"}, {Text: "ROW10"}, {Text: "ROW11"}, {Text: "ROW12"}},
+		MsgQuickReplies: []models.QuickReply{{Type: "text", Text: "ROW1"}, {Type: "text", Text: "ROW2"}, {Type: "text", Text: "ROW3"}, {Type: "text", Text: "ROW4"}, {Type: "text", Text: "ROW5"}, {Type: "text", Text: "ROW6"}, {Type: "text", Text: "ROW7"}, {Type: "text", Text: "ROW8"}, {Type: "text", Text: "ROW9"}, {Type: "text", Text: "ROW10"}, {Type: "text", Text: "ROW11"}, {Type: "text", Text: "ROW12"}},
 		MockResponses: map[string][]*httpx.MockResponse{
 			"https://waba-v2.360dialog.io/messages": {
 				httpx.NewMockResponse(201, nil, []byte(`{ "messages": [{"id": "157b5e14568e8"}] }`)),
@@ -650,7 +649,7 @@ var SendTestCasesD3C = []OutgoingTestCase{
 		MsgText:         "Hola",
 		MsgURN:          "whatsapp:250788123123",
 		MsgLocale:       "spa",
-		MsgQuickReplies: []models.QuickReply{{Text: "ROW1"}, {Text: "ROW2"}, {Text: "ROW3"}, {Text: "ROW4"}},
+		MsgQuickReplies: []models.QuickReply{{Type: "text", Text: "ROW1"}, {Type: "text", Text: "ROW2"}, {Type: "text", Text: "ROW3"}, {Type: "text", Text: "ROW4"}},
 		MockResponses: map[string][]*httpx.MockResponse{
 			"https://waba-v2.360dialog.io/messages": {
 				httpx.NewMockResponse(201, nil, []byte(`{ "messages": [{"id": "157b5e14568e8"}] }`)),
@@ -665,7 +664,7 @@ var SendTestCasesD3C = []OutgoingTestCase{
 		Label:           "Interactive Button Message Send with image attachment",
 		MsgText:         "Interactive Button Msg",
 		MsgURN:          "whatsapp:250788123123",
-		MsgQuickReplies: []models.QuickReply{{Text: "BUTTON1"}},
+		MsgQuickReplies: []models.QuickReply{{Type: "text", Text: "BUTTON1"}},
 		MsgAttachments:  []string{"image/jpeg:https://foo.bar/image.jpg"},
 		MockResponses: map[string][]*httpx.MockResponse{
 			"https://waba-v2.360dialog.io/messages": {
@@ -685,7 +684,7 @@ var SendTestCasesD3C = []OutgoingTestCase{
 		Label:           "Interactive Button Message Send with video attachment",
 		MsgText:         "Interactive Button Msg",
 		MsgURN:          "whatsapp:250788123123",
-		MsgQuickReplies: []models.QuickReply{{Text: "BUTTON1"}},
+		MsgQuickReplies: []models.QuickReply{{Type: "text", Text: "BUTTON1"}},
 		MsgAttachments:  []string{"video/mp4:https://foo.bar/video.mp4"},
 		MockResponses: map[string][]*httpx.MockResponse{
 			"https://waba-v2.360dialog.io/messages": {
@@ -705,7 +704,7 @@ var SendTestCasesD3C = []OutgoingTestCase{
 		Label:           "Interactive Button Message Send with document attachment",
 		MsgText:         "Interactive Button Msg",
 		MsgURN:          "whatsapp:250788123123",
-		MsgQuickReplies: []models.QuickReply{{Text: "BUTTON1"}},
+		MsgQuickReplies: []models.QuickReply{{Type: "text", Text: "BUTTON1"}},
 		MsgAttachments:  []string{"document/pdf:https://foo.bar/document.pdf"},
 		MockResponses: map[string][]*httpx.MockResponse{
 			"https://waba-v2.360dialog.io/messages": {
@@ -725,7 +724,7 @@ var SendTestCasesD3C = []OutgoingTestCase{
 		Label:           "Interactive Button Message Send with audio attachment",
 		MsgText:         "Interactive Button Msg",
 		MsgURN:          "whatsapp:250788123123",
-		MsgQuickReplies: []models.QuickReply{{Text: "ROW1"}, {Text: "ROW2"}, {Text: "ROW3"}},
+		MsgQuickReplies: []models.QuickReply{{Type: "text", Text: "ROW1"}, {Type: "text", Text: "ROW2"}, {Type: "text", Text: "ROW3"}},
 		MsgAttachments:  []string{"audio/mp3:https://foo.bar/audio.mp3"},
 		MockResponses: map[string][]*httpx.MockResponse{
 			"*/messages": {
@@ -743,7 +742,7 @@ var SendTestCasesD3C = []OutgoingTestCase{
 		Label:           "Interactive List Message Send with attachment",
 		MsgText:         "Interactive List Msg",
 		MsgURN:          "whatsapp:250788123123",
-		MsgQuickReplies: []models.QuickReply{{Text: "ROW1"}, {Text: "ROW2"}, {Text: "ROW3"}, {Text: "ROW4"}},
+		MsgQuickReplies: []models.QuickReply{{Type: "text", Text: "ROW1"}, {Type: "text", Text: "ROW2"}, {Type: "text", Text: "ROW3"}, {Type: "text", Text: "ROW4"}},
 		MsgAttachments:  []string{"image/jpeg:https://foo.bar/image.jpg"},
 		MockResponses: map[string][]*httpx.MockResponse{
 			"*/messages": {
@@ -754,6 +753,54 @@ var SendTestCasesD3C = []OutgoingTestCase{
 		ExpectedRequests: []ExpectedRequest{
 			{Body: `{"messaging_product":"whatsapp","recipient_type":"individual","to":"250788123123","type":"image","image":{"link":"https://foo.bar/image.jpg"}}`},
 			{Body: `{"messaging_product":"whatsapp","recipient_type":"individual","to":"250788123123","type":"interactive","interactive":{"type":"list","body":{"text":"Interactive List Msg"},"action":{"button":"Menu","sections":[{"rows":[{"id":"0","title":"ROW1"},{"id":"1","title":"ROW2"},{"id":"2","title":"ROW3"},{"id":"3","title":"ROW4"}]}]}}}`},
+		},
+		ExpectedExtIDs: []string{"157b5e14568e8", "157b5e14568e8"},
+	},
+	{
+		Label:           "Interactive with location request",
+		MsgText:         "Interactive send location",
+		MsgURN:          "whatsapp:250788123123",
+		MsgQuickReplies: []models.QuickReply{{Type: "location"}},
+		MockResponses: map[string][]*httpx.MockResponse{
+			"https://waba-v2.360dialog.io/messages": {
+				httpx.NewMockResponse(201, nil, []byte(`{ "messages": [{"id": "157b5e14568e8"}] }`)),
+			},
+		},
+		ExpectedRequests: []ExpectedRequest{{
+			Body: `{"messaging_product":"whatsapp","recipient_type":"individual","to":"250788123123","type":"interactive","interactive":{"type":"location_request_message","body":{"text":"Interactive send location"},"action":{"name":"send_location"}}}`,
+		}},
+		ExpectedExtIDs: []string{"157b5e14568e8"},
+	},
+	{
+		Label:           "Interactive with location request, with extra quick replies ignored",
+		MsgText:         "Interactive send location",
+		MsgURN:          "whatsapp:250788123123",
+		MsgQuickReplies: []models.QuickReply{{Type: "location"}, {Type: "text", Text: "Yes"}},
+		MockResponses: map[string][]*httpx.MockResponse{
+			"https://waba-v2.360dialog.io/messages": {
+				httpx.NewMockResponse(201, nil, []byte(`{ "messages": [{"id": "157b5e14568e8"}] }`)),
+			},
+		},
+		ExpectedRequests: []ExpectedRequest{{
+			Body: `{"messaging_product":"whatsapp","recipient_type":"individual","to":"250788123123","type":"interactive","interactive":{"type":"location_request_message","body":{"text":"Interactive send location"},"action":{"name":"send_location"}}}`,
+		}},
+		ExpectedExtIDs: []string{"157b5e14568e8"},
+	},
+	{
+		Label:           "Interactive with location request, with attachment",
+		MsgText:         "Interactive send location",
+		MsgURN:          "whatsapp:250788123123",
+		MsgQuickReplies: []models.QuickReply{{Type: "location"}, {Type: "text", Text: "Yes"}},
+		MsgAttachments:  []string{"image/jpeg:https://foo.bar/image.jpg"},
+		MockResponses: map[string][]*httpx.MockResponse{
+			"https://waba-v2.360dialog.io/messages": {
+				httpx.NewMockResponse(201, nil, []byte(`{ "messages": [{"id": "157b5e14568e8"}] }`)),
+				httpx.NewMockResponse(201, nil, []byte(`{ "messages": [{"id": "157b5e14568e8"}] }`)),
+			},
+		},
+		ExpectedRequests: []ExpectedRequest{
+			{Body: `{"messaging_product":"whatsapp","recipient_type":"individual","to":"250788123123","type":"image","image":{"link":"https://foo.bar/image.jpg"}}`},
+			{Body: `{"messaging_product":"whatsapp","recipient_type":"individual","to":"250788123123","type":"interactive","interactive":{"type":"location_request_message","body":{"text":"Interactive send location"},"action":{"name":"send_location"}}}`},
 		},
 		ExpectedExtIDs: []string{"157b5e14568e8", "157b5e14568e8"},
 	},
@@ -798,6 +845,34 @@ var SendTestCasesD3C = []OutgoingTestCase{
 		MsgURN:  "whatsapp:250788123123",
 		MockResponses: map[string][]*httpx.MockResponse{
 			"https://waba-v2.360dialog.io/messages": {
+				httpx.NewMockResponse(403, nil, []byte(`{ "error": {"message": "(#250012) some error","code": 250012 }}`)),
+			},
+		},
+		ExpectedRequests: []ExpectedRequest{
+			{
+				Path: "/messages",
+				Body: `{"messaging_product":"whatsapp","recipient_type":"individual","to":"250788123123","type":"text","text":{"body":"Error","preview_url":false}}`,
+			},
+		},
+		ExpectedError: courier.ErrFailedWithReason("250012", "(#250012) some error"),
+	},
+	{
+		Label:   "Error Channel Contact Pair limit hit",
+		MsgText: "Pair limit",
+		MsgURN:  "whatsapp:250788123123",
+		MockResponses: map[string][]*httpx.MockResponse{
+			"https://waba-v2.360dialog.io/messages": {
+				httpx.NewMockResponse(403, nil, []byte(`{ "error": {"message": "(#131056) (Business Account, Consumer Account) pair rate limit hit","code": 131056 }}`)),
+			},
+		},
+		ExpectedError: courier.ErrConnectionThrottled,
+	},
+	{
+		Label:   "Error Throttled",
+		MsgText: "Error",
+		MsgURN:  "whatsapp:250788123123",
+		MockResponses: map[string][]*httpx.MockResponse{
+			"https://waba-v2.360dialog.io/messages": {
 				httpx.NewMockResponse(403, nil, []byte(`{ "error": {"message": "(#130429) Rate limit hit","code": 130429 }}`)),
 			},
 		},
@@ -807,7 +882,41 @@ var SendTestCasesD3C = []OutgoingTestCase{
 				Body: `{"messaging_product":"whatsapp","recipient_type":"individual","to":"250788123123","type":"text","text":{"body":"Error","preview_url":false}}`,
 			},
 		},
-		ExpectedError: courier.ErrFailedWithReason("130429", "(#130429) Rate limit hit"),
+		ExpectedError: courier.ErrConnectionThrottled,
+	},
+	{
+		Label:   "Error Retryable",
+		MsgText: "Error",
+		MsgURN:  "whatsapp:250788123123",
+		MockResponses: map[string][]*httpx.MockResponse{
+			"https://waba-v2.360dialog.io/messages": {
+				httpx.NewMockResponse(400, nil, []byte(`{ "error": {"message": "Media upload error","code": 131053 }}`)),
+			},
+		},
+		ExpectedRequests: []ExpectedRequest{
+			{
+				Path: "/messages",
+				Body: `{"messaging_product":"whatsapp","recipient_type":"individual","to":"250788123123","type":"text","text":{"body":"Error","preview_url":false}}`,
+			},
+		},
+		ExpectedError: courier.ErrRetryableWithReason("131053", "Media upload error"),
+	},
+	{
+		Label:   "Error Message",
+		MsgText: "Error",
+		MsgURN:  "whatsapp:250788123123",
+		MockResponses: map[string][]*httpx.MockResponse{
+			"https://waba-v2.360dialog.io/messages": {
+				httpx.NewMockResponse(403, nil, []byte(`{ "error": {"message": "Other error with message","code": 0 }}`)),
+			},
+		},
+		ExpectedRequests: []ExpectedRequest{
+			{
+				Path: "/messages",
+				Body: `{"messaging_product":"whatsapp","recipient_type":"individual","to":"250788123123","type":"text","text":{"body":"Error","preview_url":false}}`,
+			},
+		},
+		ExpectedError: courier.ErrFailedWithReason("0", "Other error with message"),
 	},
 	{
 		Label:   "Error Connection",
