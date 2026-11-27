@@ -129,7 +129,7 @@ func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.Sen
 		return errors.New("blank base_url")
 	}
 
-	sendURL := fmt.Sprintf("%s/send", baseURL)
+	sendURL := buildSendURL(baseURL)
 
 	payload := newOutgoingMessage("message", msg.URN().Path(), msg.Channel().Address(), handlers.TextOnlyQuickReplies(msg.QuickReplies()))
 	lenAttachments := len(msg.Attachments())
@@ -221,6 +221,10 @@ func (h *handler) Send(ctx context.Context, msg courier.MsgOut, res *courier.Sen
 	}
 
 	return nil
+}
+
+func buildSendURL(baseURL string) string {
+	return strings.TrimRight(baseURL, "/") + "/send"
 }
 
 func newOutgoingMessage(payType, to, from string, quickReplies []string) *moPayload {

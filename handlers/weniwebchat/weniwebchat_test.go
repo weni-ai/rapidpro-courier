@@ -228,6 +228,15 @@ var sendTestCases = []OutgoingTestCase{
 	},
 }
 
+func TestBuildSendURL(t *testing.T) {
+	if got, want := buildSendURL("https://websocket.weni.ai"), "https://websocket.weni.ai/send"; got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+	if got, want := buildSendURL("https://websocket.weni.ai/"), "https://websocket.weni.ai/send"; got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}
+
 func TestOutgoing(t *testing.T) {
 	var defaultChannel = []courier.Channel{
 		test.NewMockChannel(channelUUID, "WWC", "250788383383", "", []string{urns.External.Prefix}, map[string]any{models.ConfigBaseURL: "https://foo.bar"}),
